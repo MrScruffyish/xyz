@@ -16,7 +16,12 @@ The parts of bc that are linked into `xyz` (`src/data.c`, `src/library.c`,
 * `src/rand.c` also under the MIT License, Copyright (c) 2014-2017 Melissa
   O'Neill and PCG Project contributors.
 
-Both licenses are compatible with the GPL. They require their copyright
+When GNU readline is available at build time, `xyz` is also linked with
+it (dynamically) for line editing. GNU readline is licensed under the GNU
+GPL version 3 or later, the same as xyz. On systems where the readline
+interface is provided by libedit (BSD license), that is used instead.
+
+The bc licenses are compatible with the GPL. They require their copyright
 notices and license texts to be kept with source and binary
 distributions. The full texts are in `bc-LICENSE.md` (a verbatim copy of
 bc's `LICENSE.md`), and bc's contributor list is in `bc-NOTICE.md`.

@@ -36,14 +36,17 @@ Parser::Parser(const std::string& text) { tokenize(text); }
 
 void Parser::tokenize(const std::string& s)
 {
+	src_ = s;
 	size_t i = 0;
 	int line = 1, depth = 0;
 	auto at = [&s](size_t k) { return k < s.size() ? s[k] : '\0'; };
-	auto push = [this](T t, std::string text, int l) {
-		toks_.push_back(Tok{t, std::move(text), l});
+	// a token covering s[b, i)
+	auto push = [this, &i](T t, std::string text, int l, size_t b) {
+		toks_.push_back(Tok{t, std::move(text), l, b, i});
 	};
 	while (i < s.size()) {
 		char c = s[i];
+		size_t b = i;
 		if (c == ' ' || c == '\t' || c == '\r' || c == '\f' || c == '\v') {
 			i++;
 		} else if (c == '\\' && at(i + 1) == '\n') {
@@ -58,7 +61,7 @@ void Parser::tokenize(const std::string& s)
 		} else if (c == '/' && at(i + 1) == '*') {
 			size_t end = s.find("*/", i + 2);
 			if (end == std::string::npos) {
-				push(T::Bad, "unterminated comment", line);
+				push(T::Bad, "unterminated comment", line, b);
 				break;
 			}
 			for (size_t k = i; k < end; k++)
@@ -66,15 +69,24 @@ void Parser::tokenize(const std::string& s)
 					line++;
 			i = end + 2;
 		} else if (c == '\n') {
+			i++;
 			if (depth == 0)
-				push(T::Sep, "\n", line);
+				push(T::Sep, "\n", line, b);
 			line++;
-			i++;
 		} else if (c == ';') {
-			push(T::Sep, ";", line);
 			i++;
+			push(T::Sep, ";", line, b);
+		} else if (c == '"') {
+			size_t end = s.find_first_of("\"\n", i + 1);
+			if (end == std::string::npos || s[end] != '"') {
+				i = end == std::string::npos ? s.size() : end;
+				push(T::Bad, "unterminated string", line, b);
+				depth = 0; // the statement ends with this line
+				continue;
+			}
+			i = end + 1;
+			push(T::Str, s.substr(b + 1, end - b - 1), line, b);
 		} else if (isDigit(c) || (c == '.' && isDigit(at(i + 1)))) {
-			size_t b = i;
 			while (isDigit(at(i)))
 				i++;
 			if (at(i) == '.') {
@@ -82,15 +94,14 @@ void Parser::tokenize(const std::string& s)
 				while (isDigit(at(i)))
 					i++;
 			}
-			push(T::Num, s.substr(b, i - b), line);
+			push(T::Num, s.substr(b, i - b), line, b);
 			if (isIdStart(at(i))) // 2x means 2*x
-				push(T::Op, "*", line);
+				push(T::Op, "*", line, i);
 		} else if (isIdStart(c)) {
-			size_t b = i;
 			while (isIdChar(at(i)))
 				i++;
 			std::string w = s.substr(b, i - b);
-			push(isKeyword(w) ? T::Kw : T::Id, w, line);
+			push(isKeyword(w) ? T::Kw : T::Id, w, line, b);
 		} else {
 			const char* op = nullptr;
 			for (const char* o : kOps)
@@ -105,19 +116,19 @@ void Parser::tokenize(const std::string& s)
 				else
 					std::snprintf(msg, sizeof msg, "unexpected character 0x%02x",
 					              static_cast<unsigned char>(c));
-				push(T::Bad, msg, line);
 				i++;
+				push(T::Bad, msg, line, b);
 				continue;
 			}
-			if (op[0] == '(' )
+			if (op[0] == '(')
 				depth++;
 			else if (op[0] == ')' && depth > 0)
 				depth--;
-			push(T::Op, op, line);
 			i += std::strlen(op);
+			push(T::Op, op, line, b);
 		}
 	}
-	push(T::Eof, "", line);
+	push(T::Eof, "", line, i);
 }
 
 const Parser::Tok& Parser::at(size_t k) const
@@ -166,6 +177,9 @@ std::optional<Stmt> Parser::next()
 	Stmt s = statement();
 	if (isOp("}"))
 		syntax("unexpected '}'");
+	// the statement's text, as typed (without its separator)
+	if (pos_ > stmtStart_)
+		s.source = src_.substr(at(stmtStart_).begin, at(pos_ - 1).end - at(stmtStart_).begin);
 	endStatement(s);
 	return s;
 }
@@ -533,6 +547,11 @@ Expr Parser::primary()
 		advance();
 		Expr e = expr();
 		expectOp(")", "expected ')'");
+		return e;
+	}
+	if (tok().type == T::Str) {
+		Expr e = mkStr(tok().text);
+		advance();
 		return e;
 	}
 	if (tok().type == T::Kw)

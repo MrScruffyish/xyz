@@ -34,7 +34,13 @@ make                  # builds bcl out-of-tree in build/bcl, then ./xyz
 make test             # golden, CLI and randomised tests
 make test-asan        # the same under AddressSanitizer + UBSan
 make BC_DIR=/path/to/bc
+make READLINE=no      # build without line editing
 ```
+
+If GNU readline (or libedit's compatible version, as on macOS) is
+installed, `make` uses it for line editing at the terminal. On Debian and
+Ubuntu it comes with `sudo apt install libreadline-dev`. Without it,
+everything works the same, only without arrow keys and history.
 
 The bc checkout is never modified. bcl is configured with
 `configure.sh -a` (library only) in `build/bcl`.
@@ -49,6 +55,10 @@ xyz [-h] [-v] [-e expr]... [file]...
   terminal, each statement is run as soon as it is complete. Open
   parentheses or braces, or an `if (...)` still waiting for its `{`,
   continue onto the next line.
+* At a terminal, the arrow keys edit the line and step through earlier
+  lines (if built with readline). What you type is echoed on stderr, so
+  `xyz > results.txt` still writes only results. Pipes and files are read
+  without any line editing.
 * `-e EXPR` runs `EXPR`. You can repeat it. When `-e` is used, standard
   input is only read if `-` is given as a file.
 * Files and `-e` expressions all share the same variables, and run in order.
@@ -84,6 +94,8 @@ a=1; b=a; b        -> 1              (only the last one has no ';')
 | `def(name)`                  | prints how `name` is stored                         |
 | `unset(name, ...)`           | removes variables or functions                      |
 | `table(...)`                 | prints a table of values, see below                 |
+| `save("file")`               | writes the statements of this session to a file     |
+| `transcript("file")`         | the same, with the output added as `#` comments     |
 | `quit` or `halt`             | stops reading input                                 |
 
 A statement continues onto the next line while parentheses are open, or
@@ -443,6 +455,8 @@ pipes straight into gnuplot, `sort` or a spreadsheet.
 | `def(name)`         | prints how a variable or function is stored (statement only) |
 | `unset(name, ...)`  | removes variables and functions (statement only)            |
 | `table(...)`        | prints a table of values (statement only)                   |
+| `save("file")`      | writes this session's statements to a file (statement only) |
+| `transcript("file")`| the same, with each statement's output as `#` comments (statement only) |
 
 In `diff`, `deg`, `coeff`, `quo` and `rem`, the variable argument is
 treated as a free symbol even if it has a value. For example, after
@@ -482,11 +496,45 @@ make an expression defined where it was not (`x/x` at `x = 0`), so it is
 never done automatically: stored `:=` formulas keep their factors, and
 `subs` never cancels. `eval` cancels before inserting values.
 
+### Saving your work
+
+`save("work.xyz")` writes every statement run so far in this session
+(typed, piped, from files or `-e`) to `work.xyz`, exactly as it was
+written, so `xyz work.xyz` repeats the session. `transcript("work.txt")`
+writes the same statements, each followed by the output it produced as
+`#` comment lines: a readable record that can still be run with `xyz`.
+
+```
+a = 4
+b = a*a+3;
+b
+1/0
+transcript("work.txt")
+```
+
+writes
+
+```
+a = 4
+# a = 4
+b = a*a+3;
+b
+# 19
+1/0
+# error: line 4: division by zero
+```
+
+`save` and `transcript` themselves are not recorded, and an existing file
+is overwritten. File names are written in double quotes; strings cannot
+be used for anything else. Statements with a syntax error are not
+recorded. Nothing is kept between sessions: there is no history file.
+
 ### Output format
 
 The output can be read back as input: `x^2/4+x/3+1/9`, `-x/2`,
-`3/(4*(x+y)^2)`, `x^(1/2)`, `2^(-x)`, `x < 3 && y == 2`. Long numbers are
-not broken across lines (unlike bc's `\` line continuation).
+`3/(4*(x+y)^2)`, `x^(1/2)`, `2^(-x)`, `x < 3 && y == 2`. Results are
+never broken into several lines, whatever their length (bc breaks lines at
+70 characters with a `\`), so the terminal uses its full width.
 
 ## Planned
 

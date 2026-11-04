@@ -39,6 +39,9 @@ void checkComputable(const Expr& e)
 {
 	if (e->kind == Kind::Dec)
 		throw Error("a num() result cannot be used in further calculations");
+	if (e->kind == Kind::Str)
+		throw Error("strings can only be used as file names in save() and "
+		            "transcript()");
 	if (!g_safe && (e->kind == Kind::Call || e->kind == Kind::Arg))
 		throw std::logic_error("unevaluated call reached the simplifier");
 }

@@ -20,6 +20,13 @@
 
 #include <unistd.h>
 
+#ifdef XYZ_READLINE
+#include <cstdio>
+#include <cstdlib>
+#include <readline/history.h>
+#include <readline/readline.h>
+#endif
+
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -51,7 +58,8 @@ void usage(std::ostream& out)
 	       "  diff(e, x[, n]), deg(e, x), coeff(e, x, n), quo(p, q, x), rem(p, q, x),\n"
 	       "  gcd(a, b, ...), lcm(a, b, ...), cancel(e)\n"
 	       "Statements: disp(e, ...), def(a), unset(a, ...),\n"
-	       "  table(e, ..., x = 1 to 10 [step s], ...), quit\n";
+	       "  table(e, ..., x = 1 to 10 [step s], ...), save(\"file\"),\n"
+	       "  transcript(\"file\"), quit\n";
 }
 
 void version()
@@ -75,12 +83,43 @@ std::string readAll(std::istream& in)
 }
 
 // Interactive: run each complete line (or group of lines) as it is typed.
+// Reads one line typed at the terminal; false at the end of the input.
+// With readline: arrow keys, line editing and history (up/down).
+bool readLine(bool editing, std::string& line)
+{
+#ifdef XYZ_READLINE
+	if (editing) {
+		char* s = readline("");
+		if (s == nullptr)
+			return false;
+		line = s;
+		if (*s)
+			add_history(s);
+		std::free(s);
+		return true;
+	}
+#else
+	(void)editing;
+#endif
+	return static_cast<bool>(std::getline(std::cin, line));
+}
+
 int runInteractive(xyz::Interpreter& interp)
 {
 	int errors = 0;
 	std::string chunk, line;
 	interp.setShowLines(false);
-	while (!interp.quit() && std::getline(std::cin, line)) {
+	bool editing = false;
+#ifdef XYZ_READLINE
+	// readline echoes what is typed; send that to stderr (the terminal) so
+	// that stdout only gets results, e.g. with  xyz > results.txt
+	editing = isatty(STDERR_FILENO) != 0;
+	if (editing) {
+		rl_outstream = stderr;
+		rl_bind_key('\t', rl_insert); // no file name completion
+	}
+#endif
+	while (!interp.quit() && readLine(editing, line)) {
 		chunk += line + "\n";
 		if (xyz::textIncomplete(chunk))
 			continue;

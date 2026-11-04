@@ -27,6 +27,7 @@
 //   unary     := ('-'|'+') unary | power
 //   power     := primary [ '^' unary ]           (right associative)
 //   primary   := NUMBER | NAME | NAME '(' [args] ')' | '(' expr ')'
+//              | STRING                        ("file name", for save)
 //   args      := arg { ',' arg }
 //   arg       := NAME '=' expr ['to' expr ['step' expr]] | expr
 //
@@ -58,6 +59,7 @@ struct Stmt {
 	Expr stop, step;                 // For: stop (C-style: condition), step
 	Exprs conds;                     // If/Else: one condition per branch
 	std::vector<std::vector<Stmt>> blocks; // If: branches (+ else); loops: body
+	std::string source; // top-level statements: the text as typed
 };
 
 struct SyntaxError : Error {
@@ -79,11 +81,12 @@ public:
 	void recover();
 
 private:
-	enum class T { Eof, Sep, Num, Id, Kw, Op, Bad };
+	enum class T { Eof, Sep, Num, Id, Kw, Op, Str, Bad };
 	struct Tok {
 		T type = T::Eof;
 		std::string text; // Num/Id/Kw text, Op spelling, Sep ";" or "\n"
 		int line = 1;
+		size_t begin = 0, end = 0; // position in the source text
 	};
 
 	void tokenize(const std::string& src);
@@ -113,6 +116,7 @@ private:
 	Expr primary();
 	Expr argument();
 
+	std::string src_;
 	std::vector<Tok> toks_;
 	size_t pos_ = 0;
 	size_t stmtStart_ = 0;

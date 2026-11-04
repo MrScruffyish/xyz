@@ -16,6 +16,7 @@ Expr mkNum(Rational r) { return make(Kind::Num, std::move(r), {}, {}); }
 Expr mkInt(long v) { return mkNum(Rational(v)); }
 Expr mkSym(std::string name) { return make(Kind::Sym, {}, std::move(name), {}); }
 Expr mkDec(std::string text) { return make(Kind::Dec, {}, std::move(text), {}); }
+Expr mkStr(std::string text) { return make(Kind::Str, {}, std::move(text), {}); }
 Expr mkNode(Kind k, Exprs args) { return make(k, {}, {}, std::move(args)); }
 Expr mkPow(Expr b, Expr e) { return mkNode(Kind::Pow, {std::move(b), std::move(e)}); }
 
@@ -53,8 +54,9 @@ int rank(Kind k)
 	case Kind::Call: return 5;
 	case Kind::Arg: return 6;
 	case Kind::Dec: return 7;
+	case Kind::Str: return 8;
 	}
-	return 8;
+	return 9;
 }
 } // namespace
 

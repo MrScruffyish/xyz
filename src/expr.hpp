@@ -24,6 +24,7 @@ enum class Kind {
 	Arg,  // name = args[0]  (eval/table argument), or a range
 	      // name = args[0] to args[1] step args[2]  (table argument)
 	Dec,  // decimal text produced by num(); cannot be computed with
+	Str,  // "text": only as a file name for save() and transcript()
 };
 
 struct Node;
@@ -42,6 +43,7 @@ Expr mkNum(Rational r);
 Expr mkInt(long v);
 Expr mkSym(std::string name);
 Expr mkDec(std::string text);
+Expr mkStr(std::string text);
 Expr mkNode(Kind k, Exprs args);
 Expr mkPow(Expr b, Expr e);
 Expr mkCall(std::string name, Exprs args);

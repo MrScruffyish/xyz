@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "interpreter.hpp"
 
+#include <fstream>
 #include <new>
 #include <ostream>
 
@@ -36,6 +37,8 @@ const Builtin builtins[] = {
 	{"def", 1, 1, -1, -1, true},
 	{"unset", 1, 1000, -1, -1, true},
 	{"table", 1, 1000, -1, -1, true},
+	{"save", 1, 1, -1, -1, true},
+	{"transcript", 1, 1, -1, -1, true},
 };
 
 const Builtin* findBuiltin(const std::string& name)
@@ -185,6 +188,9 @@ Expr Interpreter::resolve(const Expr& e, const Ctx& c)
 	case Kind::Num:
 	case Kind::Dec:
 		return e;
+	case Kind::Str:
+		throw Error("strings can only be used as file names in save() and "
+		            "transcript()");
 	case Kind::Sym:
 		r = lookup(e, c);
 		break;
@@ -513,6 +519,7 @@ Expr Interpreter::inlineFor(const Expr& e, const std::string& v, Memo& memo) con
 	}
 	case Kind::Num:
 	case Kind::Dec:
+	case Kind::Str:
 		r = e;
 		break;
 	default: {
@@ -771,6 +778,11 @@ bool Interpreter::execStatementCall(const Stmt& s)
 		if (v == defs_.end())
 			throw Error("def: '" + x + "' is not defined");
 		out_ << defString(x, v->second) << '\n';
+	} else if (e->name == "save" || e->name == "transcript") {
+		if (e->args[0]->kind != Kind::Str)
+			throw Error(e->name + ": the file name must be a string, like " +
+			            e->name + "(\"work.xyz\")");
+		saveSession(e->args[0]->name, e->name == "transcript", s.show);
 	} else if (e->name == "disp") {
 		std::string line;
 		for (size_t i = 0; i < n; i++) {
@@ -783,6 +795,33 @@ bool Interpreter::execStatementCall(const Stmt& s)
 		table(e);
 	}
 	return true;
+}
+
+void Interpreter::saveSession(const std::string& file, bool withOutput, bool show)
+{
+	std::ofstream f(file);
+	if (!f)
+		throw Error("cannot write the file '" + file + "'");
+	for (const LogEntry& e : log_) {
+		f << e.source << (e.show ? "\n" : ";\n");
+		if (!withOutput || e.output.empty())
+			continue;
+		// output as comments: the file can still be run with xyz
+		size_t b = 0;
+		while (b < e.output.size()) {
+			size_t n = e.output.find('\n', b);
+			if (n == std::string::npos)
+				n = e.output.size();
+			f << "# " << e.output.substr(b, n - b) << '\n';
+			b = n + 1;
+		}
+	}
+	f.close();
+	if (!f)
+		throw Error("cannot write the file '" + file + "'");
+	if (show)
+		out_ << "saved " << log_.size() << " statement" << (log_.size() == 1 ? "" : "s")
+		     << " to " << file << '\n';
 }
 
 void Interpreter::execBlock(const std::vector<Stmt>& body)
@@ -895,6 +934,14 @@ int Interpreter::run(const std::string& text)
 			break;
 		IfState next = IfState::None;
 		curLine_ = s->line;
+		// record the statement and its output for save() / transcript(),
+		// except save and transcript themselves
+		bool record = s->type != Stmt::Type::Empty && !s->source.empty() &&
+		              !(s->type == Stmt::Type::Expr && s->expr->kind == Kind::Call &&
+		                (s->expr->name == "save" || s->expr->name == "transcript"));
+		LogEntry entry{s->source, s->show, {}};
+		if (record)
+			outBuf_.sink = errBuf_.sink = &entry.output;
 		try {
 			if (s->type == Stmt::Type::Else) {
 				// continues the if executed just before (typed on a later line)
@@ -921,6 +968,11 @@ int Interpreter::run(const std::string& text)
 			errors++;
 			next = IfState::None;
 		}
+		out_.flush();
+		err_.flush();
+		outBuf_.sink = errBuf_.sink = nullptr;
+		if (record)
+			log_.push_back(std::move(entry));
 		if (s->type != Stmt::Type::Empty)
 			lastIf_ = next;
 		loopVars_.clear();

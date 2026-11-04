@@ -17,6 +17,16 @@ BC_ABS  := $(abspath $(BC_DIR))
 BCL_DIR := $(BUILD)/bcl
 BCL_LIB := $(BCL_DIR)/bin/libbcl.a
 
+# Line editing (arrow keys, history) when typing at a terminal, with GNU
+# readline (or libedit's compatible version) if it is available.
+# make READLINE=no  builds without it.
+READLINE ?= $(shell printf '\043include <cstdio>\n\043include <readline/readline.h>\nint main(){return readline("")!=0;}\n' \
+              | $(CXX) -x c++ - -lreadline -o /dev/null 2>/dev/null && echo yes || echo no)
+ifeq ($(READLINE),yes)
+  RL_FLAGS := -DXYZ_READLINE
+  RL_LIBS  := -lreadline
+endif
+
 SRCS := $(wildcard src/*.cpp)
 HDRS := $(wildcard src/*.hpp)
 OBJS := $(SRCS:src/%.cpp=$(BUILD)/obj/%.o)
@@ -36,17 +46,23 @@ $(BCL_LIB):
 
 $(BUILD)/obj/%.o: src/%.cpp $(HDRS) $(BCL_LIB) Makefile
 	@mkdir -p $(dir $@)
-	$(CXX) $(WARN) $(CXXFLAGS) -I$(BC_ABS)/include -c -o $@ $<
+	$(CXX) $(WARN) $(CXXFLAGS) $(RL_FLAGS) -I$(BC_ABS)/include -c -o $@ $<
 
 $(BUILD)/asan/%.o: src/%.cpp $(HDRS) $(BCL_LIB) Makefile
 	@mkdir -p $(dir $@)
-	$(CXX) $(WARN) -O1 -g $(SAN) -I$(BC_ABS)/include -c -o $@ $<
+	$(CXX) $(WARN) -O1 -g $(SAN) $(RL_FLAGS) -I$(BC_ABS)/include -c -o $@ $<
+
+# rebuild main.o when READLINE changes
+RL_STAMP := $(BUILD)/readline-$(READLINE)
+$(RL_STAMP):
+	@mkdir -p $(BUILD) && rm -f $(BUILD)/readline-* && touch $@
+$(BUILD)/obj/main.o $(BUILD)/asan/main.o: $(RL_STAMP)
 
 xyz: $(OBJS) $(BCL_LIB)
-	$(CXX) $(CXXFLAGS) -o $@ $(OBJS) $(BCL_LIB)
+	$(CXX) $(CXXFLAGS) -o $@ $(OBJS) $(BCL_LIB) $(RL_LIBS)
 
 $(BUILD)/xyz-asan: $(ASAN_OBJS) $(BCL_LIB)
-	$(CXX) $(SAN) -o $@ $(ASAN_OBJS) $(BCL_LIB)
+	$(CXX) $(SAN) -o $@ $(ASAN_OBJS) $(BCL_LIB) $(RL_LIBS)
 
 test: xyz
 	python3 tests/run_tests.py ./xyz

@@ -25,8 +25,9 @@
 #include "expr.hpp"
 #include "parser.hpp"
 
-#include <iosfwd>
 #include <map>
+#include <ostream>
+#include <streambuf>
 #include <set>
 #include <string>
 #include <unordered_map>
@@ -36,9 +37,40 @@
 
 namespace xyz {
 
+// Writes to another stream buffer and, while sink is set, also appends
+// everything to *sink (used to record the output of each statement).
+class TeeBuf : public std::streambuf {
+public:
+	explicit TeeBuf(std::streambuf* real) : real_(real) {}
+	std::string* sink = nullptr;
+
+protected:
+	int overflow(int c) override
+	{
+		if (c == traits_type::eof())
+			return 0;
+		if (sink)
+			sink->push_back(static_cast<char>(c));
+		return real_->sputc(static_cast<char>(c));
+	}
+	std::streamsize xsputn(const char* s, std::streamsize n) override
+	{
+		if (sink)
+			sink->append(s, static_cast<size_t>(n));
+		return real_->sputn(s, n);
+	}
+	int sync() override { return real_->pubsync(); }
+
+private:
+	std::streambuf* real_;
+};
+
 class Interpreter {
 public:
-	Interpreter(std::ostream& out, std::ostream& err) : out_(out), err_(err) {}
+	Interpreter(std::ostream& out, std::ostream& err)
+		: outBuf_(out.rdbuf()), errBuf_(err.rdbuf()), out_(&outBuf_), err_(&errBuf_)
+	{
+	}
 
 	// Runs program text; returns the number of errors. Sets quit() when a
 	// quit statement is executed.
@@ -77,7 +109,8 @@ private:
 	void execFor(const Stmt& s);
 	void execCFor(const Stmt& s);
 	bool execBranches(const Stmt& s); // if/else chain; true if a branch ran
-	bool execStatementCall(const Stmt& s); // disp, def, unset, table
+	bool execStatementCall(const Stmt& s); // disp, def, unset, table, save
+	void saveSession(const std::string& file, bool withOutput, bool show);
 	void table(const Expr& call);
 	bool truth(const Expr& cond);
 	Expr evaluate(const Expr& e); // in the context of the current statement
@@ -108,8 +141,17 @@ private:
 
 	std::map<std::string, Def> defs_;
 	std::vector<std::pair<std::string, Expr>> loopVars_; // innermost last
-	std::ostream& out_;
-	std::ostream& err_;
+	TeeBuf outBuf_, errBuf_;
+	std::ostream out_;
+	std::ostream err_;
+
+	// everything run so far, for save() and transcript()
+	struct LogEntry {
+		std::string source; // the statement as typed
+		bool show;          // false if it ended with ';'
+		std::string output; // what it printed (results and errors)
+	};
+	std::vector<LogEntry> log_;
 	bool quit_ = false;
 	bool showLines_ = true;
 	int curLine_ = 0;

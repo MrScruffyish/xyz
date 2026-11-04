@@ -42,6 +42,7 @@ int prec(const Expr& n)
 	case Kind::Dec:
 		return n->name[0] == '-' ? P_NEG : P_ATOM;
 	case Kind::Sym:
+	case Kind::Str:
 		return P_ATOM;
 	case Kind::Call:
 		return opPrec(n->name) >= 0 ? opPrec(n->name) : P_ATOM;
@@ -153,6 +154,9 @@ void pr(std::string& out, const Expr& n, int minPrec)
 	case Kind::Sym:
 	case Kind::Dec:
 		out += n->name;
+		break;
+	case Kind::Str:
+		out += '"' + n->name + '"';
 		break;
 	case Kind::Add: {
 		bool first = true;
