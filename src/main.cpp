@@ -27,6 +27,7 @@
 #include <readline/readline.h>
 #endif
 
+#include <cctype>
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -39,13 +40,15 @@ const char* const kVersion = "0.1.0";
 
 void usage(std::ostream& out)
 {
-	out << "usage: xyz [-h] [-v] [-e expr]... [file]...\n"
+	out << "usage: xyz [-h] [-v] [--imag=NAME] [-e expr]... [file]...\n"
 	       "\n"
 	       "Reads statements from the files (or standard input). A statement\n"
 	       "prints its result unless it ends with ';'.\n"
 	       "\n"
 	       "  -e, --expression EXPR  run EXPR (may be repeated); standard input\n"
 	       "                         is then only read if '-' is given as a file\n"
+	       "      --imag=NAME        call the imaginary unit NAME instead of im,\n"
+	       "                         e.g. --imag=i\n"
 	       "  -h, --help             show this help\n"
 	       "  -v, --version          show version and license\n"
 	       "\n"
@@ -56,10 +59,11 @@ void usage(std::ostream& out)
 	       "\n"
 	       "Functions: eval(e, x=v, ...), subs(e, x=v, ...), expand(e), num(e[, digits]),\n"
 	       "  diff(e, x[, n]), deg(e, x), coeff(e, x, n), quo(p, q, x), rem(p, q, x),\n"
-	       "  gcd(a, b, ...), lcm(a, b, ...), cancel(e)\n"
+	       "  gcd(a, b, ...), lcm(a, b, ...), cancel(e), sqrt(e), Re(z), Im(z),\n"
+	       "  conj(z), abs(z)   (im is the imaginary unit)\n"
 	       "Statements: disp(e, ...), def(a), unset(a, ...),\n"
-	       "  table(e, ..., x = 1 to 10 [step s], ...), save(\"file\"),\n"
-	       "  transcript(\"file\"), quit\n";
+	       "  table(e, ..., x = 1 to 10 [step s], ...), latex(e), save(\"file\"),\n"
+	       "  transcript(\"file\") (LaTeX if the name ends in .tex), quit\n";
 }
 
 void version()
@@ -151,6 +155,25 @@ int realMain(int argc, char** argv)
 				return 2;
 			}
 			exprs.push_back(argv[i]);
+		} else if (a == "--imag" || a.rfind("--imag=", 0) == 0) {
+			std::string name;
+			if (a == "--imag") {
+				if (++i >= argc) {
+					std::cerr << "xyz: option --imag needs a name\n";
+					return 2;
+				}
+				name = argv[i];
+			} else {
+				name = a.substr(7);
+			}
+			bool ok = !name.empty() && (std::isalpha(static_cast<unsigned char>(name[0])) || name[0] == '_');
+			for (char ch : name)
+				ok = ok && (std::isalnum(static_cast<unsigned char>(ch)) || ch == '_');
+			if (!ok || xyz::isKeyword(name)) {
+				std::cerr << "xyz: --imag: '" << name << "' cannot be used as a name\n";
+				return 2;
+			}
+			xyz::setImagName(name);
 		} else if (a.rfind("--expression=", 0) == 0) {
 			exprs.push_back(a.substr(13));
 		} else if (a == "--") {

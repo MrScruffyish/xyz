@@ -157,6 +157,11 @@ BigInt BigInt::abs() const
 	return r;
 }
 
+BigInt BigInt::isqrt() const
+{
+	return BigInt(check(bcl_sqrt_keep(n_)), Raw{}); // scale 0: truncated
+}
+
 BigInt BigInt::gcd(const BigInt& a, const BigInt& b)
 {
 	BigInt x = a.abs(), y = b.abs();

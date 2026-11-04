@@ -42,6 +42,8 @@ void checkComputable(const Expr& e)
 	if (e->kind == Kind::Str)
 		throw Error("strings can only be used as file names in save() and "
 		            "transcript()");
+	if (e->kind == Kind::Call && isSymbolicFunction(e->name))
+		return; // e.g. Re(x^(1/2)): an atom
 	if (!g_safe && (e->kind == Kind::Call || e->kind == Kind::Arg))
 		throw std::logic_error("unevaluated call reached the simplifier");
 }
@@ -74,16 +76,30 @@ std::pair<Expr, Expr> baseExp(const Expr& f)
 	return {f, nullptr};
 }
 
-// the factors of a term without its numeric coefficient
+// the factors of a term without its numeric coefficient; im counts as part
+// of the coefficient, so x^2+2*im*x-1 is ordered like x^2+2*x-1
 Exprs termFactors(const Expr& t)
 {
+	Exprs f;
 	if (t->kind == Kind::Mul) {
-		size_t s = t->args[0]->kind == Kind::Num ? 1 : 0;
-		return Exprs(t->args.begin() + static_cast<long>(s), t->args.end());
+		for (const Expr& x : t->args)
+			if (x->kind != Kind::Num && !isImUnit(x))
+				f.push_back(x);
+	} else if (t->kind != Kind::Num && !isImUnit(t)) {
+		f.push_back(t);
 	}
-	if (t->kind == Kind::Num)
-		return {};
-	return {t};
+	return f;
+}
+
+bool hasImFactor(const Expr& t)
+{
+	if (isImUnit(t))
+		return true;
+	if (t->kind == Kind::Mul)
+		for (const Expr& x : t->args)
+			if (isImUnit(x))
+				return true;
+	return false;
 }
 
 Rational termDegree(const Exprs& factors)
@@ -116,6 +132,8 @@ bool termBefore(const Expr& a, const Expr& b)
 	}
 	if (fa.size() != fb.size())
 		return fa.size() > fb.size();
+	if (hasImFactor(a) != hasImFactor(b)) // x before im*x
+		return !hasImFactor(a);
 	return compare(a, b) < 0;
 }
 
@@ -151,6 +169,134 @@ Expr withCoeff(const Rational& c, const Expr& rest)
 	else
 		f.push_back(rest);
 	return mkNode(Kind::Mul, std::move(f));
+}
+
+} // namespace
+
+bool isSymbolicFunction(const std::string& name)
+{
+	return name == "Re" || name == "Im" || name == "conj" || name == "abs";
+}
+
+bool complexParts(const Expr& e, Rational& re, Rational& im)
+{
+	switch (e->kind) {
+	case Kind::Num:
+		re = e->num;
+		im = Rational(0);
+		return true;
+	case Kind::Sym:
+		if (!isImUnit(e))
+			return false;
+		re = Rational(0);
+		im = Rational(1);
+		return true;
+	case Kind::Mul:
+		if (e->args.size() == 2 && e->args[0]->kind == Kind::Num && isImUnit(e->args[1])) {
+			re = Rational(0);
+			im = e->args[0]->num;
+			return true;
+		}
+		return false;
+	case Kind::Add: {
+		Rational r, i;
+		for (const Expr& t : e->args) {
+			Rational a, b;
+			if (!complexParts(t, a, b))
+				return false;
+			r = r + a;
+			i = i + b;
+		}
+		re = r;
+		im = i;
+		return true;
+	}
+	default:
+		return false;
+	}
+}
+
+Expr makeComplex(const Rational& re, const Rational& im)
+{
+	return add(mkNum(re), mul(mkNum(im), mkIm()));
+}
+
+namespace {
+
+bool isImTerm(const Expr& t)
+{
+	return isImUnit(t) || (t->kind == Kind::Mul && t->args.size() == 2 &&
+	                       t->args[0]->kind == Kind::Num && isImUnit(t->args[1]));
+}
+
+// n = s^2 * t with t as small as we can find cheaply (small primes and a
+// final perfect-square test; factoring large numbers is not attempted)
+void squareFactor(const BigInt& n, BigInt& s, BigInt& t)
+{
+	s = BigInt(1L);
+	t = n;
+	BigInt r = t.isqrt();
+	if (r * r == t) {
+		s = r;
+		t = BigInt(1L);
+		return;
+	}
+	for (long p = 2; p < 1000; p++) {
+		BigInt pp(p * p);
+		if (pp.compare(t) > 0)
+			break;
+		while (t.mod(pp).isZero()) {
+			t = t.divTrunc(pp);
+			s = s * BigInt(p);
+		}
+	}
+	r = t.isqrt();
+	if (r * r == t) {
+		s = s * r;
+		t = BigInt(1L);
+	}
+}
+
+// v^(sgn/2) for a positive rational v and sgn = +-1:
+// sqrt(p/q) = sqrt(p*q)/q = c*sqrt(t), with t as small as found
+Expr rootPow(const Rational& v, long sgn)
+{
+	BigInt s, t;
+	squareFactor(v.numerator() * v.denominator(), s, t);
+	Rational c(s, v.denominator());
+	if (sgn < 0)
+		c = Rational(1) / c;
+	if (t.isOne())
+		return mkNum(c);
+	// built directly (not simplified again, which would come back here)
+	Expr r = mkPow(mkNum(Rational(t, BigInt(1L))), mkNum(Rational(sgn) / Rational(2)));
+	return c.isOne() ? r : mkNode(Kind::Mul, {mkNum(c), r});
+}
+
+// (re + im*i)^k for an exact complex number
+Expr complexPow(Rational re, Rational im, long k)
+{
+	if (k < 0) {
+		Rational d = re * re + im * im;
+		if (d.isZero())
+			throw Error("division by zero");
+		re = re / d;
+		im = -im / d;
+		k = -k;
+	}
+	Rational rr(1), ri(0);
+	while (k > 0) {
+		if (k & 1) {
+			Rational a = rr * re - ri * im;
+			ri = rr * im + ri * re;
+			rr = a;
+		}
+		Rational a = re * re - im * im;
+		im = Rational(2) * re * im;
+		re = a;
+		k >>= 1;
+	}
+	return makeComplex(rr, ri);
 }
 
 } // namespace
@@ -195,8 +341,18 @@ Expr simpAdd(const Exprs& in)
 		out.push_back(c.isOne() ? rest : withCoeff(c, rest));
 	}
 	std::sort(out.begin(), out.end(), termBefore);
+	// a complex number reads a+b*im: the im term goes after the constant
+	Expr imTerm;
+	for (auto it = out.begin(); it != out.end(); ++it)
+		if (isImTerm(*it)) {
+			imTerm = *it;
+			out.erase(it);
+			break;
+		}
 	if (!konst.isZero())
 		out.push_back(mkNum(konst));
+	if (imTerm)
+		out.push_back(imTerm);
 	if (out.empty())
 		return mkInt(0);
 	if (out.size() == 1)
@@ -250,6 +406,38 @@ Expr simpMul(const Exprs& in)
 		out.push_back(mkNum(coeff));
 		return simpMul(out);
 	}
+	{
+		// exact complex numbers are multiplied out: (3+im)*(5-3im) -> 18-4*im
+		Rational re(1), imv(0);
+		Exprs others;
+		int count = 0;
+		bool hasSum = false;
+		for (const Expr& f : out) {
+			Rational a, b;
+			if ((f->kind == Kind::Add || isImUnit(f)) && complexParts(f, a, b)) {
+				count++;
+				hasSum = hasSum || f->kind == Kind::Add;
+				Rational nr = re * a - imv * b;
+				imv = re * b + imv * a;
+				re = nr;
+			} else {
+				others.push_back(f);
+			}
+		}
+		if (hasSum && (count > 1 || others.empty())) {
+			if (others.empty())
+				return makeComplex(coeff * re, coeff * imv);
+			if (imv.isZero()) {
+				coeff = coeff * re;
+			} else if (re.isZero()) {
+				coeff = coeff * imv;
+				others.push_back(mkIm());
+			} else {
+				others.push_back(makeComplex(re, imv));
+			}
+			out = others;
+		}
+	}
 	if (coeff.isZero() && !(g_safe && !out.empty() && hasDenominator(mkNode(Kind::Mul, out))))
 		return mkInt(0);
 	if (out.empty())
@@ -279,6 +467,20 @@ Expr simpPow(const Expr& b, const Expr& e)
 		long k = 0;
 		bool eint = e->num.isInt();
 		bool fits = e->num.toLong(k);
+		if (isImUnit(b) && eint && fits) { // im^2 = -1
+			switch (((k % 4) + 4) % 4) {
+			case 0: return mkInt(1);
+			case 1: return b;
+			case 2: return mkInt(-1);
+			default: return mul(mkInt(-1), b);
+			}
+		}
+		Rational cr, ci;
+		if (b->kind == Kind::Add && eint && complexParts(b, cr, ci)) {
+			if (!fits)
+				throw Error("exponent too large");
+			return complexPow(cr, ci, k);
+		}
 		if (b->kind == Kind::Num) {
 			if (b->num.isZero()) {
 				if (e->num.isZero())
@@ -294,6 +496,23 @@ Expr simpPow(const Expr& b, const Expr& e)
 					throw Error("exponent too large");
 				return mkNum(b->num.pow(k));
 			}
+			if (e->num.denominator() == BigInt(2L)) {
+				// square roots: b^(m/2) = sqrt(b)^m, exact where possible,
+				// sqrt(-4) = 2*im (principal value)
+				long m;
+				if (!e->num.numerator().toLong(m))
+					throw Error("exponent too large");
+				if (m == 1 || m == -1) {
+					if (b->num.sign() > 0)
+						return rootPow(b->num, m);
+					// 1/im = -im
+					return mul(simpPow(mkIm(), mkInt(m)), rootPow(-b->num, m));
+				}
+				// b^(m/2) = b^((m-1)/2) * b^(1/2)
+				long sgn = m > 0 ? 1 : -1;
+				return mul(simpPow(b, mkInt((m - sgn) / 2)),
+				           simpPow(b, mkNum(Rational(sgn) / Rational(2))));
+			}
 			return mkPow(b, e);
 		}
 		if (e->num.isZero() && !(g_safe && hasDenominator(b)))
@@ -306,8 +525,10 @@ Expr simpPow(const Expr& b, const Expr& e)
 		if (eint) {
 			// (a^k)^n -> a^(k*n) only for integer k: (x^(1/2))^2 is
 			// not simplified to x (roots are decided later)
+			// ... and for positive numbers: (2^(1/2))^2 -> 2
 			if (b->kind == Kind::Pow && b->args[1]->kind == Kind::Num &&
-			    b->args[1]->num.isInt())
+			    (b->args[1]->num.isInt() ||
+			     (b->args[0]->kind == Kind::Num && b->args[0]->num.sign() > 0)))
 				return simpPow(b->args[0], mul(b->args[1], e));
 			if (b->kind == Kind::Mul) {
 				Exprs f;

@@ -380,8 +380,10 @@ Stmt Parser::statement()
 		return s;
 	}
 	s.type = isOp("=") ? Stmt::Type::Assign : Stmt::Type::Define;
+	// names as typed (the imaginary unit is stored as a hidden symbol)
+	auto typed = [](const Expr& x) { return isImUnit(x) ? imagName() : x->name; };
 	if (e->kind == Kind::Sym) {
-		s.name = e->name;
+		s.name = typed(e);
 	} else if (e->kind == Kind::Call) {
 		s.name = e->name;
 		s.isFunction = true;
@@ -390,9 +392,9 @@ Stmt Parser::statement()
 				throw SyntaxError("the parameters of " + e->name +
 				                  "() must be names", s.line);
 			for (const std::string& p : s.params)
-				if (p == a->name)
+				if (p == typed(a))
 					throw SyntaxError("parameter '" + p + "' appears twice", s.line);
-			s.params.push_back(a->name);
+			s.params.push_back(typed(a));
 		}
 	} else {
 		throw SyntaxError("can only assign to a name, or define a function "
@@ -529,7 +531,7 @@ Expr Parser::primary()
 		std::string name = tok().text;
 		advance();
 		if (!isOp("("))
-			return mkSym(name);
+			return name == imagName() ? mkIm() : mkSym(name);
 		advance();
 		Exprs args;
 		if (!isOp(")")) {

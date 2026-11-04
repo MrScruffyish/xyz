@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "interpreter.hpp"
 
+#include <algorithm>
 #include <fstream>
 #include <new>
 #include <ostream>
@@ -33,12 +34,18 @@ const Builtin builtins[] = {
 	{"gcd", 1, 1000, -1, -1, false},
 	{"lcm", 1, 1000, -1, -1, false},
 	{"cancel", 1, 1, -1, -1, false},
+	{"Re", 1, 1, -1, -1, false},
+	{"Im", 1, 1, -1, -1, false},
+	{"conj", 1, 1, -1, -1, false},
+	{"abs", 1, 1, -1, -1, false},
+	{"sqrt", 1, 1, -1, -1, false},
 	{"disp", 1, 1000, -1, -1, true},
 	{"def", 1, 1, -1, -1, true},
 	{"unset", 1, 1000, -1, -1, true},
 	{"table", 1, 1000, -1, -1, true},
 	{"save", 1, 1, -1, -1, true},
 	{"transcript", 1, 1, -1, -1, true},
+	{"latex", 1, 1, -1, -1, true},
 };
 
 const Builtin* findBuiltin(const std::string& name)
@@ -47,6 +54,13 @@ const Builtin* findBuiltin(const std::string& name)
 		if (name == b.name)
 			return &b;
 	return nullptr;
+}
+
+// names with a fixed meaning that cannot be assigned or used as parameters
+void checkNotReserved(const std::string& name)
+{
+	if (name == imagName())
+		throw Error("'" + name + "' is the imaginary unit and cannot be assigned");
 }
 
 bool isOperator(const std::string& n)
@@ -95,6 +109,8 @@ const std::string& varName(const Expr& c, size_t i)
 	if (a->kind != Kind::Sym)
 		throw Error(c->name + ": argument " + std::to_string(i + 1) +
 		            " must be a variable name");
+	if (isImUnit(a))
+		throw Error(c->name + ": '" + imagName() + "' is the imaginary unit, not a variable");
 	return a->name;
 }
 
@@ -219,6 +235,8 @@ Expr Interpreter::resolve(const Expr& e, const Ctx& c)
 
 Expr Interpreter::lookup(const Expr& sym, const Ctx& c)
 {
+	if (isImUnit(sym))
+		return sym; // the imaginary unit never has a value
 	const std::string& name = sym->name;
 	if (c.lex) {
 		auto it = c.lex->find(name);
@@ -381,6 +399,7 @@ Expr Interpreter::callBuiltin(const Expr& e, const Ctx& c)
 			const Expr& a = e->args[i];
 			if (a->kind != Kind::Arg)
 				throw Error(name + ": arguments after the first must be name=value");
+			checkNotReserved(a->name);
 			dyn.bindings[a->name] = resolve(a->args[0], c);
 		}
 		if (name == "subs") // substitute first, then evaluate and simplify
@@ -399,6 +418,16 @@ Expr Interpreter::callBuiltin(const Expr& e, const Ctx& c)
 		return expand(resolve(e->args[0], c));
 	if (name == "cancel")
 		return cancel(resolve(e->args[0], c));
+	if (name == "Re")
+		return realPart(resolve(e->args[0], c));
+	if (name == "Im")
+		return imagPart(resolve(e->args[0], c));
+	if (name == "conj")
+		return conjugate(resolve(e->args[0], c));
+	if (name == "abs")
+		return absValue(resolve(e->args[0], c));
+	if (name == "sqrt")
+		return simpPow(resolve(e->args[0], c), mkNum(Rational(1) / Rational(2)));
 	if (name == "gcd" || name == "lcm") {
 		Exprs v;
 		bool numbers = true;
@@ -422,9 +451,17 @@ Expr Interpreter::callBuiltin(const Expr& e, const Ctx& c)
 	if (name == "num") {
 		long digits = n > 1 ? intArg(e, 1, c, 0, 1000000) : 20;
 		Expr v = resolve(e->args[0], c);
-		if (v->kind != Kind::Num)
+		Rational re, im;
+		if (!complexParts(v, re, im))
 			throw Error("num: not a number: " + toString(v));
-		return mkDec(v->num.toDecimal(static_cast<size_t>(digits)));
+		size_t d = static_cast<size_t>(digits);
+		std::string s = im.isZero() || !re.isZero() ? re.toDecimal(d) : "";
+		if (!im.isZero()) {
+			std::string i = im.abs().toDecimal(d);
+			s += im.sign() < 0 ? "-" : (s.empty() ? "" : "+");
+			s += (i == "1" ? "" : i + "*") + imagName();
+		}
+		return mkDec(s);
 	}
 	if (name == "diff") {
 		const std::string& x = varName(e, 1);
@@ -603,6 +640,9 @@ bool Interpreter::truth(const Expr& cond)
 
 void Interpreter::execAssign(const Stmt& s)
 {
+	checkNotReserved(s.name);
+	for (const std::string& p : s.params)
+		checkNotReserved(p);
 	checkStatementOnly(s.expr, false);
 	if (isLoopVar(s.name))
 		throw Error("cannot assign to the loop variable '" + s.name + "'");
@@ -632,11 +672,14 @@ void Interpreter::execAssign(const Stmt& s)
 	}
 	defs_[s.name] = d;
 	if (s.show)
-		out_ << defString(s.name, d) << '\n';
+		emitDef(s.name, d);
 }
 
 void Interpreter::execDefine(const Stmt& s)
 {
+	checkNotReserved(s.name);
+	for (const std::string& p : s.params)
+		checkNotReserved(p);
 	checkStatementOnly(s.expr, false);
 	if (isLoopVar(s.name))
 		throw Error("cannot assign to the loop variable '" + s.name + "'");
@@ -654,11 +697,12 @@ void Interpreter::execDefine(const Stmt& s)
 	d.body = safeSimplify(raw);
 	defs_[s.name] = d;
 	if (s.show)
-		out_ << defString(s.name, d) << '\n';
+		emitDef(s.name, d);
 }
 
 void Interpreter::execFor(const Stmt& s)
 {
+	checkNotReserved(s.name);
 	Expr start = evaluate(s.expr), stop = evaluate(s.stop), step = evaluate(s.step);
 	Rational v = numberOf(start, "the start of a for loop");
 	Rational to = numberOf(stop, "the end of a for loop");
@@ -679,6 +723,7 @@ void Interpreter::execFor(const Stmt& s)
 
 void Interpreter::execCFor(const Stmt& s)
 {
+	checkNotReserved(s.name);
 	// for (i = init; cond; i = step): i is a loop variable like in the
 	// range form, visible in cond, step and body only
 	Expr v = evaluate(s.expr);
@@ -701,8 +746,10 @@ void Interpreter::table(const Expr& e)
 {
 	Exprs columns, ranges;
 	for (const Expr& a : e->args) {
-		if (isRange(a))
+		if (isRange(a)) {
+			checkNotReserved(a->name);
 			ranges.push_back(a);
+		}
 		else if (a->kind == Kind::Arg)
 			throw Error("table: write a range as " + a->name + " = start to stop");
 		else
@@ -728,10 +775,10 @@ void Interpreter::table(const Expr& e)
 				Ctx g = c;
 				g.deep = true; // like eval: plug values into snapshots
 				g.memo = &fresh;
-				std::string line;
-				for (size_t i = 0; i < columns.size(); i++)
-					line += (i ? "\t" : "") + toString(self.resolve(columns[i], g));
-				self.out_ << line << '\n';
+				Exprs row;
+				for (const Expr& col : columns)
+					row.push_back(self.resolve(col, g));
+				self.emitRow(row);
 				return;
 			}
 			const Expr& r = ranges[k];
@@ -769,7 +816,7 @@ bool Interpreter::execStatementCall(const Stmt& s)
 	checkStatementOnly(e, true);
 	if (e->name == "unset") {
 		for (size_t i = 0; i < n; i++)
-			varName(e, i);
+			checkNotReserved(varName(e, i));
 		for (const Expr& a : e->args)
 			defs_.erase(a->name);
 	} else if (e->name == "def") {
@@ -777,20 +824,24 @@ bool Interpreter::execStatementCall(const Stmt& s)
 		auto v = defs_.find(x);
 		if (v == defs_.end())
 			throw Error("def: '" + x + "' is not defined");
-		out_ << defString(x, v->second) << '\n';
+		emitDef(x, v->second);
 	} else if (e->name == "save" || e->name == "transcript") {
 		if (e->args[0]->kind != Kind::Str)
 			throw Error(e->name + ": the file name must be a string, like " +
 			            e->name + "(\"work.xyz\")");
 		saveSession(e->args[0]->name, e->name == "transcript", s.show);
 	} else if (e->name == "disp") {
-		std::string line;
+		Exprs row;
 		for (size_t i = 0; i < n; i++) {
 			if (e->args[i]->kind == Kind::Arg)
 				throw Error("disp: 'name=value' arguments are not allowed here");
-			line += (i ? "\t" : "") + toString(evaluate(e->args[i]));
+			row.push_back(evaluate(e->args[i]));
 		}
-		out_ << line << '\n';
+		emitRow(row);
+	} else if (e->name == "latex") {
+		if (e->args[0]->kind == Kind::Arg)
+			throw Error("latex: 'name=value' arguments are not allowed here");
+		emitLatex(evaluate(e->args[0]));
 	} else {
 		table(e);
 	}
@@ -802,6 +853,13 @@ void Interpreter::saveSession(const std::string& file, bool withOutput, bool sho
 	std::ofstream f(file);
 	if (!f)
 		throw Error("cannot write the file '" + file + "'");
+	bool tex = file.size() > 4 && file.compare(file.size() - 4, 4, ".tex") == 0;
+	if (tex) {
+		writeLatex(f, withOutput);
+	} else {
+	if (imagName() != "im")
+		f << "# the imaginary unit is " << imagName() << ": run with  xyz --imag="
+		  << imagName() << " " << file << "\n";
 	for (const LogEntry& e : log_) {
 		f << e.source << (e.show ? "\n" : ";\n");
 		if (!withOutput || e.output.empty())
@@ -816,12 +874,117 @@ void Interpreter::saveSession(const std::string& file, bool withOutput, bool sho
 			b = n + 1;
 		}
 	}
+	}
 	f.close();
 	if (!f)
 		throw Error("cannot write the file '" + file + "'");
 	if (show)
-		out_ << "saved " << log_.size() << " statement" << (log_.size() == 1 ? "" : "s")
-		     << " to " << file << '\n';
+		emitText("saved " + std::to_string(log_.size()) + " statement" +
+		         (log_.size() == 1 ? "" : "s") + " to " + file);
+}
+
+// ---------------------------------------------------------------- output
+
+void Interpreter::emitValue(const Expr& v)
+{
+	out_ << toString(v) << '\n';
+	if (items_)
+		items_->push_back({OutItem::Type::Value, {v}, {}, {}, {}});
+}
+
+void Interpreter::emitLatex(const Expr& v)
+{
+	out_ << toLatex(v) << '\n';
+	if (items_)
+		items_->push_back({OutItem::Type::Value, {v}, {}, {}, {}});
+}
+
+void Interpreter::emitDef(const std::string& name, const Def& d)
+{
+	out_ << defString(name, d) << '\n';
+	if (items_)
+		items_->push_back({OutItem::Type::Def, {}, name, d, {}});
+}
+
+void Interpreter::emitRow(const Exprs& v)
+{
+	std::string line;
+	for (size_t i = 0; i < v.size(); i++)
+		line += (i ? "\t" : "") + toString(v[i]);
+	out_ << line << '\n';
+	if (items_)
+		items_->push_back({OutItem::Type::Row, v, {}, {}, {}});
+}
+
+void Interpreter::emitText(const std::string& t)
+{
+	out_ << t << '\n';
+	if (items_)
+		items_->push_back({OutItem::Type::Text, {}, {}, {}, t});
+}
+
+std::string Interpreter::defLatex(const std::string& name, const Def& d) const
+{
+	std::string s = latexName(name);
+	if (d.function) {
+		s += "\\left(";
+		for (size_t i = 0; i < d.params.size(); i++)
+			s += (i ? ", " : "") + latexName(d.params[i]);
+		s += "\\right)";
+	}
+	return s + (d.formula ? " \\mathrel{:=} " : " = ") + toLatex(d.body);
+}
+
+// A LaTeX document: every statement verbatim, followed by its results as
+// formulas (tables as arrays, errors in italics).
+void Interpreter::writeLatex(std::ostream& f, bool withOutput) const
+{
+	f << "% written by xyz transcript()\n"
+	     "\\documentclass{article}\n"
+	     "\\usepackage{amsmath}\n"
+	     "\\begin{document}\n";
+	if (imagName() != "im")
+		f << "% the imaginary unit was called " << imagName() << " (xyz --imag="
+		  << imagName() << ")\n";
+	for (const LogEntry& e : log_) {
+		f << "\n\\begin{verbatim}\n" << e.source << (e.show ? "" : ";")
+		  << "\n\\end{verbatim}\n";
+		if (!withOutput)
+			continue;
+		const auto& it = e.items;
+		for (size_t i = 0; i < it.size();) {
+			using T = OutItem::Type;
+			auto single = [](const OutItem& o) {
+				return o.type == T::Value || o.type == T::Def ||
+				       (o.type == T::Row && o.values.size() == 1);
+			};
+			if (single(it[i])) { // consecutive results, one per line
+				f << "\\begin{gather*}\n";
+				for (bool first = true; i < it.size() && single(it[i]); i++, first = false) {
+					f << (first ? "" : " \\\\\n")
+					  << (it[i].type == T::Def ? defLatex(it[i].name, it[i].def)
+					                           : toLatex(it[i].values[0]));
+				}
+				f << "\n\\end{gather*}\n";
+			} else if (it[i].type == T::Row) { // consecutive rows: an array
+				size_t cols = 0, j = i;
+				for (; j < it.size() && it[j].type == T::Row && it[j].values.size() > 1; j++)
+					cols = std::max(cols, it[j].values.size());
+				f << "\\[\n\\begin{array}{" << std::string(cols, 'c') << "}\n";
+				for (; i < j; i++) {
+					for (size_t k = 0; k < it[i].values.size(); k++)
+						f << (k ? " & " : "") << toLatex(it[i].values[k]);
+					f << (i + 1 < j ? " \\\\\n" : "\n");
+				}
+				f << "\\end{array}\n\\]\n";
+			} else {
+				f << (it[i].type == T::Error ? "\\textit{" : "\\texttt{")
+				  << latexText(it[i].text) << "}\\par\n";
+				i++;
+			}
+		}
+	}
+	f << "\n\\end{document}\n";
 }
 
 void Interpreter::execBlock(const std::vector<Stmt>& body)
@@ -856,7 +1019,7 @@ void Interpreter::exec(const Stmt& s)
 		checkStatementOnly(s.expr, true);
 		Expr v = evaluate(s.expr);
 		if (s.show)
-			out_ << toString(v) << '\n';
+			emitValue(v);
 		return;
 	}
 	case Stmt::Type::If:
@@ -909,11 +1072,14 @@ bool Interpreter::execBranches(const Stmt& s)
 void Interpreter::report(int line, const std::string& msg)
 {
 	out_.flush();
-	err_ << "error: ";
+	std::string text = "error: ";
 	if (showLines_)
-		err_ << "line " << line << ": ";
-	err_ << msg << '\n';
+		text += "line " + std::to_string(line) + ": ";
+	text += msg;
+	err_ << text << '\n';
 	err_.flush();
+	if (items_)
+		items_->push_back({OutItem::Type::Error, {}, {}, {}, text});
 }
 
 int Interpreter::run(const std::string& text)
@@ -939,9 +1105,11 @@ int Interpreter::run(const std::string& text)
 		bool record = s->type != Stmt::Type::Empty && !s->source.empty() &&
 		              !(s->type == Stmt::Type::Expr && s->expr->kind == Kind::Call &&
 		                (s->expr->name == "save" || s->expr->name == "transcript"));
-		LogEntry entry{s->source, s->show, {}};
-		if (record)
+		LogEntry entry{s->source, s->show, {}, {}};
+		if (record) {
 			outBuf_.sink = errBuf_.sink = &entry.output;
+			items_ = &entry.items;
+		}
 		try {
 			if (s->type == Stmt::Type::Else) {
 				// continues the if executed just before (typed on a later line)
@@ -971,6 +1139,7 @@ int Interpreter::run(const std::string& text)
 		out_.flush();
 		err_.flush();
 		outBuf_.sink = errBuf_.sink = nullptr;
+		items_ = nullptr;
 		if (record)
 			log_.push_back(std::move(entry));
 		if (s->type != Stmt::Type::Empty)

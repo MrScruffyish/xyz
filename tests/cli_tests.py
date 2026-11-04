@@ -4,6 +4,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 import os
 import pty
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -165,6 +166,43 @@ def main():
               (run_tty(b, f'a := x+1\nif (1)\n{{ c = 2; }}\nsave("{work}");\n'),
                open(work).read()),
               ("a := x+1\n", "a := x+1\nif (1)\n{ c = 2; }\n"))
+        # transcript as a LaTeX document
+        tex = os.path.join(d, "work.tex")
+        run(b, [], "a = 4\nf(x) := x^2/x\nfor (i = 1 to 2) { disp(i, i/2) }\n"
+                   f'1/0\ntranscript("{tex}")\n')
+        with open(tex) as f:
+            doc = f.read()
+        check("LaTeX transcript", all(part in doc for part in (
+            "\\documentclass{article}", "\\begin{verbatim}\na = 4\n\\end{verbatim}",
+            "\\begin{gather*}\na = 4\n\\end{gather*}",
+            "f\\left(x\\right) \\mathrel{:=} \\frac{x^{2}}{x}",
+            "\\begin{array}{cc}\n1 & \\frac{1}{2} \\\\\n2 & 1\n\\end{array}",
+            "\\textit{error: line 4: division by zero}",
+            "\\end{document}")), True)
+        if shutil.which("pdflatex"):
+            p = subprocess.run(["pdflatex", "-interaction=nonstopmode",
+                                "-halt-on-error", "work.tex"], cwd=d,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            check("LaTeX transcript compiles with pdflatex", p.returncode, 0)
+        else:
+            print("skipping pdflatex check (not installed)")
+
+        # --imag=NAME
+        check("--imag=i: input and output use i",
+              run(b, ["--imag=i", "-e", "disp((3+2i)*(1-i), Re(1/(x+i)), num(i/3, 3))"]),
+              ("5-i\tx/(x^2+1)\t0.333*i\n", "", 0))
+        check("--imag=i: im is an ordinary name",
+              run(b, ["--imag", "i", "-e", "im = 5; im*2i"]), ("10*i\n", "", 0))
+        check("--imag=i: i cannot be assigned",
+              run(b, ["--imag=i", "-e", "i = 3"])[1],
+              "error: line 1: 'i' is the imaginary unit and cannot be assigned\n")
+        check("--imag needs a usable name", run(b, ["--imag=if", "-e", "1"])[1:],
+              ("xyz: --imag: 'if' cannot be used as a name\n", 2))
+        run(b, ["--imag=i", "-e", "a = 2i;", "-e", f'save("{work}");'])
+        with open(work) as f:
+            check("saved files say which unit they need", f.read(),
+                  f"# the imaginary unit is i: run with  xyz --imag=i {work}\n"
+                  "a = 2i;\n")
         check("errors go to stderr, results to stdout",
               run(b, [], "1\nfoo(1)\n2\n"),
               ("1\n2\n", "error: line 2: unknown function 'foo'\n", 1))

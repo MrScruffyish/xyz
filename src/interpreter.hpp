@@ -145,13 +145,32 @@ private:
 	std::ostream out_;
 	std::ostream err_;
 
+	// what a statement printed, kept as values for LaTeX transcripts
+	struct OutItem {
+		enum class Type { Value, Def, Row, Text, Error } type;
+		Exprs values;     // Value: one, Row: the columns
+		std::string name; // Def
+		Def def;          // Def
+		std::string text; // Text, Error
+	};
 	// everything run so far, for save() and transcript()
 	struct LogEntry {
-		std::string source; // the statement as typed
-		bool show;          // false if it ended with ';'
-		std::string output; // what it printed (results and errors)
+		std::string source;         // the statement as typed
+		bool show;                  // false if it ended with ';'
+		std::string output;         // what it printed (results and errors)
+		std::vector<OutItem> items; // the same, as values
 	};
 	std::vector<LogEntry> log_;
+	std::vector<OutItem>* items_ = nullptr; // recording for the current statement
+
+	// all results are printed through these
+	void emitValue(const Expr& v);
+	void emitLatex(const Expr& v);
+	void emitDef(const std::string& name, const Def& d);
+	void emitRow(const Exprs& v);
+	void emitText(const std::string& t);
+	void writeLatex(std::ostream& f, bool withOutput) const;
+	std::string defLatex(const std::string& name, const Def& d) const;
 	bool quit_ = false;
 	bool showLines_ = true;
 	int curLine_ = 0;

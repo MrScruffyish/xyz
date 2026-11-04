@@ -5,6 +5,8 @@
 // The output can be read back by the parser.
 #include "expr.hpp"
 
+#include <cctype>
+
 namespace xyz {
 
 namespace {
@@ -152,6 +154,8 @@ void pr(std::string& out, const Expr& n, int minPrec)
 		out += n->num.toString();
 		break;
 	case Kind::Sym:
+		out += isImUnit(n) ? imagName() : n->name;
+		break;
 	case Kind::Dec:
 		out += n->name;
 		break;
@@ -221,6 +225,260 @@ std::string toString(const Expr& e)
 {
 	std::string s;
 	pr(s, e, P_ARG);
+	return s;
+}
+
+// ------------------------------------------------------------------ LaTeX
+
+namespace {
+
+const char* const kGreek[] = {
+	"alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta",
+	"iota", "kappa", "lambda", "mu", "nu", "xi", "pi", "rho", "sigma", "tau",
+	"upsilon", "phi", "chi", "psi", "omega", "Gamma", "Delta", "Theta",
+	"Lambda", "Xi", "Pi", "Sigma", "Upsilon", "Phi", "Psi", "Omega"};
+
+bool isGreek(const std::string& s)
+{
+	for (const char* g : kGreek)
+		if (s == g)
+			return true;
+	return false;
+}
+
+void lx(std::string& out, const Expr& n, int minPrec);
+
+// joins factors: juxtaposition, or \cdot before a factor starting with a digit
+void lxFactors(std::string& out, const Exprs& v)
+{
+	for (size_t i = 0; i < v.size(); i++) {
+		std::string f;
+		lx(f, v[i], P_POW);
+		if (i)
+			out += (!f.empty() && (std::isdigit(static_cast<unsigned char>(f[0])) ||
+			                       f.rfind("\\frac", 0) == 0))
+			           ? " \\cdot " : " ";
+		out += f;
+	}
+}
+
+void lxProduct(std::string& out, const Expr& n)
+{
+	Exprs f;
+	flattenMul(n, f);
+	Rational c(1);
+	bool hasSym = false;
+	for (const Expr& x : f) {
+		if (x->kind == Kind::Num)
+			c = c * x->num;
+		else
+			hasSym = true;
+	}
+	if (c.sign() < 0)
+		out += '-';
+	Rational a = c.abs();
+	Exprs num, den;
+	if (!(a.numerator().isOne() && hasSym))
+		num.push_back(mkNum(Rational(a.numerator(), BigInt(1L))));
+	if (!a.denominator().isOne())
+		den.push_back(mkNum(Rational(a.denominator(), BigInt(1L))));
+	for (const Expr& x : f) {
+		if (x->kind == Kind::Num)
+			continue;
+		if (negNumExp(x)) {
+			Rational e = -x->args[1]->num;
+			den.push_back(e.isOne() ? x->args[0] : mkPow(x->args[0], mkNum(e)));
+		} else {
+			num.push_back(x);
+		}
+	}
+	if (den.empty()) {
+		lxFactors(out, num);
+		return;
+	}
+	out += "\\frac{";
+	if (num.empty())
+		out += '1';
+	else
+		lxFactors(out, num);
+	out += "}{";
+	lxFactors(out, den);
+	out += '}';
+}
+
+void lxSum(std::string& out, const Expr& n, bool& first)
+{
+	if (n->kind == Kind::Add) {
+		for (const Expr& t : n->args)
+			lxSum(out, t, first);
+		return;
+	}
+	std::string t;
+	lx(t, n, P_NEG);
+	if (!first && t[0] != '-')
+		out += '+';
+	out += t;
+	first = false;
+}
+
+void lxArgs(std::string& out, const Exprs& args)
+{
+	for (size_t i = 0; i < args.size(); i++) {
+		if (i)
+			out += ", ";
+		lx(out, args[i], P_ARG);
+	}
+}
+
+void lx(std::string& out, const Expr& n, int minPrec)
+{
+	bool paren = prec(n) < minPrec;
+	if (paren)
+		out += "\\left(";
+	switch (n->kind) {
+	case Kind::Num:
+		if (n->num.isInt()) {
+			out += n->num.toString();
+		} else {
+			if (n->num.sign() < 0)
+				out += '-';
+			Rational a = n->num.abs();
+			out += "\\frac{" + a.numerator().toString() + "}{" +
+			       a.denominator().toString() + "}";
+		}
+		break;
+	case Kind::Sym:
+		out += isImUnit(n) ? "i" : latexName(n->name);
+		break;
+	case Kind::Dec: {
+		std::string s = n->name, unit = "*" + imagName();
+		size_t p = s.find(unit);
+		if (p != std::string::npos)
+			s.replace(p, unit.size(), "\\,i");
+		else if (s.size() >= imagName().size() &&
+		         s.compare(s.size() - imagName().size(), std::string::npos, imagName()) == 0)
+			s.replace(s.size() - imagName().size(), std::string::npos, "i");
+		out += s;
+		break;
+	}
+	case Kind::Str:
+		out += "\\texttt{" + latexText(n->name) + "}";
+		break;
+	case Kind::Add: {
+		bool first = true;
+		lxSum(out, n, first);
+		break;
+	}
+	case Kind::Mul:
+		lxProduct(out, n);
+		break;
+	case Kind::Pow: {
+		if (negNumExp(n)) {
+			lxProduct(out, n);
+			break;
+		}
+		const Expr& e = n->args[1];
+		long k;
+		if (e->kind == Kind::Num && e->num.numerator().isOne() &&
+		    e->num.denominator().toLong(k) && k >= 2) {
+			out += k == 2 ? "\\sqrt{" : "\\sqrt[" + std::to_string(k) + "]{";
+			lx(out, n->args[0], P_ARG);
+			out += '}';
+			break;
+		}
+		lx(out, n->args[0], P_ATOM);
+		out += "^{";
+		lx(out, e, P_ARG);
+		out += '}';
+		break;
+	}
+	case Kind::Call: {
+		const std::string& f = n->name;
+		if (int op = opPrec(f); op >= 0) {
+			if (f == "!") {
+				out += "\\lnot ";
+				lx(out, n->args[0], P_ATOM);
+				break;
+			}
+			const char* sym = f == "==" ? "=" : f == "!=" ? "\\neq" : f == "<=" ? "\\le"
+			                : f == ">=" ? "\\ge" : f == "&&" ? "\\land"
+			                : f == "||" ? "\\lor" : f.c_str();
+			lx(out, n->args[0], op == P_REL ? P_ADD : op);
+			out += std::string(" ") + sym + " ";
+			lx(out, n->args[1], op == P_REL ? P_ADD : op + 1);
+			break;
+		}
+		if (f == "abs" && n->args.size() == 1) {
+			out += "\\left|";
+			lx(out, n->args[0], P_ARG);
+			out += "\\right|";
+			break;
+		}
+		if (f == "conj" && n->args.size() == 1) {
+			out += "\\overline{";
+			lx(out, n->args[0], P_ARG);
+			out += '}';
+			break;
+		}
+		if (f == "Re" || f == "Im" || f.size() > 1)
+			out += "\\operatorname{" + latexText(f) + "}";
+		else
+			out += f;
+		out += "\\left(";
+		lxArgs(out, n->args);
+		out += "\\right)";
+		break;
+	}
+	case Kind::Arg:
+		out += latexName(n->name) + " = ";
+		lx(out, n->args[0], P_OR);
+		if (isRange(n)) {
+			out += " \\ldots ";
+			lx(out, n->args[1], P_ADD);
+		}
+		break;
+	}
+	if (paren)
+		out += "\\right)";
+}
+
+} // namespace
+
+std::string latexText(const std::string& text)
+{
+	std::string r;
+	for (char c : text) {
+		switch (c) {
+		case '\\': r += "\\textbackslash{}"; break;
+		case '{': case '}': case '$': case '&': case '#': case '_': case '%':
+			r += '\\';
+			r += c;
+			break;
+		case '^': r += "\\^{}"; break;
+		case '~': r += "\\~{}"; break;
+		default: r += c;
+		}
+	}
+	return r;
+}
+
+std::string latexName(const std::string& name)
+{
+	// x_1 -> x_{1}, alpha -> \alpha, abc -> \mathrm{abc}
+	size_t u = name.rfind('_');
+	if (u != std::string::npos && u > 0 && u + 1 < name.size())
+		return latexName(name.substr(0, u)) + "_{" + latexName(name.substr(u + 1)) + "}";
+	if (isGreek(name))
+		return "\\" + name;
+	if (name.size() == 1)
+		return name;
+	return "\\mathrm{" + latexText(name) + "}";
+}
+
+std::string toLatex(const Expr& e)
+{
+	std::string s;
+	lx(s, e, P_ARG);
 	return s;
 }
 

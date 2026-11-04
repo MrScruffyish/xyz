@@ -59,6 +59,7 @@ public:
 	BigInt mod(const BigInt& b) const;
 	BigInt pow(unsigned long e) const;
 	BigInt abs() const;
+	BigInt isqrt() const; // floor(sqrt(n)) for n >= 0
 	static BigInt gcd(const BigInt& a, const BigInt& b); // >= 0
 
 	int compare(const BigInt& b) const;

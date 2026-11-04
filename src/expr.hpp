@@ -89,6 +89,27 @@ bool hasVariableDenominator(const Expr& e);
 Expr polyCoeff(const Expr& e, const std::string& x, long k);
 std::pair<Expr, Expr> polyDivide(const Expr& p, const Expr& q, const std::string& x);
 
+// --- complex numbers --------------------------------------------------
+// The imaginary unit is the symbol "%i" inside (it cannot be typed). On
+// input and output it is called imagName(): "im" unless --imag=NAME.
+extern const char* const kImag;
+inline bool isImUnit(const Expr& e) { return e->kind == Kind::Sym && e->name == kImag; }
+inline Expr mkIm() { return mkSym(kImag); }
+const std::string& imagName();
+void setImagName(const std::string& name);
+// Exact complex number a+b*im (also plain numbers)?
+bool complexParts(const Expr& e, Rational& re, Rational& im);
+Expr makeComplex(const Rational& re, const Rational& im);
+// Calls that may stay in results when they cannot be evaluated further,
+// e.g. Re(x^(1/2)).
+bool isSymbolicFunction(const std::string& name);
+// complex.cpp: real and imaginary parts where they can be found, with
+// symbols taken to be real; otherwise the call itself, e.g. Re(x^(1/2)).
+Expr realPart(const Expr& e);
+Expr imagPart(const Expr& e);
+Expr conjugate(const Expr& e);
+Expr absValue(const Expr& e);
+
 // --- gcd and cancellation (gcd.cpp) ----------------------------------
 Rational gcd(const Rational& a, const Rational& b); // >= 0; gcd(a/b, c/d) = gcd(a,c)/lcm(b,d)
 Rational lcm(const Rational& a, const Rational& b); // >= 0
@@ -106,5 +127,8 @@ bool isIdenticallyZero(const Expr& e);
 
 // --- printing (print.cpp) -------------------------------------------
 std::string toString(const Expr& e);
+std::string toLatex(const Expr& e);        // LaTeX math, e.g. \frac{x+1}{2}
+std::string latexName(const std::string& name); // x, \alpha, \mathrm{abc}, x_{1}
+std::string latexText(const std::string& text); // escapes \ { } $ & # ^ _ % ~
 
 } // namespace xyz

@@ -10,7 +10,8 @@
   5. diff() commutes with expand()
   6. quo/rem satisfy  A = Q*B + R  with deg R < deg B
      gcd(A*C, B*C) divides both and is a multiple of C; cancel keeps values
-  7. '=' snapshots and ':=' formulas vs a Python model
+  7. complex arithmetic and Re/Im/conj vs exact complex fractions
+  8. '=' snapshots and ':=' formulas vs a Python model
 
 usage: random_tests.py [binary] [--count N] [--seed S]
 """
@@ -316,6 +317,144 @@ def test_cancel(binary, rng, count):
             checked += 1
 
 
+# -------------------------------------------------------- complex numbers
+
+class C:
+    """Exact complex number with Fraction parts (the oracle)."""
+
+    def __init__(self, re, im=F(0)):
+        self.re, self.im = F(re), F(im)
+
+    @staticmethod
+    def of(v):
+        return v if isinstance(v, C) else C(v)
+
+    def __add__(self, o):
+        o = C.of(o)
+        return C(self.re + o.re, self.im + o.im)
+
+    __radd__ = __add__
+
+    def __neg__(self):
+        return C(-self.re, -self.im)
+
+    def __sub__(self, o):
+        return self + (-C.of(o))
+
+    def __rsub__(self, o):
+        return C.of(o) - self
+
+    def __mul__(self, o):
+        o = C.of(o)
+        return C(self.re * o.re - self.im * o.im, self.re * o.im + self.im * o.re)
+
+    __rmul__ = __mul__
+
+    def __truediv__(self, o):
+        o = C.of(o)
+        d = o.re * o.re + o.im * o.im
+        if d == 0:
+            raise ZeroDivisionError
+        return self * C(o.re / d, -o.im / d)
+
+    def __rtruediv__(self, o):
+        return C.of(o) / self
+
+    def __pow__(self, k):
+        if k < 0:
+            return C(1) / (self ** -k)
+        r = C(1)
+        for _ in range(k):
+            r = r * self
+        return r
+
+    def __eq__(self, o):
+        o = C.of(o)
+        return self.re == o.re and self.im == o.im
+
+
+def gen_complex(rng, depth):
+    if depth == 0 or rng.random() < 0.3:
+        r = rng.random()
+        if r < 0.4:
+            v = rng.randint(-9, 9)
+            return f"({v})", C(v)
+        if r < 0.7:
+            v = rng.randint(-9, 9)
+            return f"({v}*im)", C(0, v)
+        a, b = rng.randint(-9, 9), rng.randint(-9, 9)
+        return f"({a}+{b}*im)", C(a, b)
+    op = rng.choice("+-*/^")
+    a, av = gen_complex(rng, depth - 1)
+    if op == "^":
+        k = rng.randint(-3, 3)
+        return f"({a})^({k})", av ** k
+    b, bv = gen_complex(rng, depth - 1)
+    if op == "+":
+        return f"({a}+{b})", av + bv
+    if op == "-":
+        return f"({a}-{b})", av - bv
+    if op == "*":
+        return f"({a}*{b})", av * bv
+    return f"({a}/{b})", av / bv
+
+
+def parse_complex(text):
+    """xyz output a, b*im, a+b*im -> C, via the oracle class."""
+    return eval(to_python(text.replace("im", "IM")),
+                {"F": F, "IM": C(0, 1), "__builtins__": {}})
+
+
+CANONICAL = re.compile(r"^-?[0-9/]+$|^(-?[0-9/]+)?[-+]?([0-9]+\*)?im(/[0-9]+)?$")
+
+
+def test_complex(binary, rng, count):
+    exprs, want = [], []
+    while len(exprs) < count:
+        try:
+            e, v = gen_complex(rng, rng.randint(1, 4))
+        except ZeroDivisionError:
+            continue
+        exprs.append(e)
+        want.append(v)
+    got = xyz(binary, exprs)
+    for e, w, g in zip(exprs, want, got):
+        try:
+            have = parse_complex(g)
+        except Exception:  # noqa: BLE001
+            fail("complex", f"{e}: cannot read {g}")
+            continue
+        if have != w:
+            fail("complex", f"{e}: expected {w.re}+{w.im}*im, got {g}")
+        elif not CANONICAL.match(g):
+            fail("complex form", f"{e} -> {g} is not of the form a+b*im")
+    lines = []
+    for e in exprs:
+        lines += [f"Re({e})", f"Im({e})", f"conj({e})"]
+    got = xyz(binary, lines)
+    for k, (e, w) in enumerate(zip(exprs, want)):
+        re_, im_, cj = got[3 * k:3 * k + 3]
+        try:
+            ok = (parse_complex(re_) == C(w.re) and parse_complex(im_) == C(w.im)
+                  and parse_complex(cj) == C(w.re, -w.im))
+        except Exception:  # noqa: BLE001
+            ok = False
+        if not ok:
+            fail("Re/Im/conj", f"{e}: {re_}, {im_}, {cj}")
+
+
+def test_complex_symbols(binary, rng, count):
+    """Re(e) + im*Im(e) == e and conj(conj(e)) == e with real symbols."""
+    lines = []
+    for _ in range(count):
+        p = gen_poly(rng, rng.randint(1, 3), ["x", "y", "im"])
+        lines.append(f"Re({p}) + im*Im({p}) == {p}")
+        lines.append(f"conj(conj({p})) == {p}")
+    for line, g in zip(lines, xyz(binary, lines)):
+        if g != "1":
+            fail("complex identity", f"{line} -> {g}")
+
+
 # ---------------------------------------------- variables: '=' and ':='
 
 def test_links(binary, rng, count):
@@ -414,7 +553,7 @@ def main():
     print(f"random tests, seed {seed} (rerun with --seed {seed})")
     tests = [test_numbers, test_division_by_zero, test_vs_bc, test_expand,
              test_eval, test_diff, test_division, test_gcd, test_cancel,
-             test_links]
+             test_complex, test_complex_symbols, test_links]
     for t in tests:
         before = failures
         t(a.binary, rng, a.count)

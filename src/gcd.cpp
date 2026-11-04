@@ -124,7 +124,7 @@ Expr exactDiv(const Expr& a, const Expr& b)
 		auto rc = polyCoefficients(r, x);
 		long dr = degreeOf(rc);
 		if (dr < db)
-			throw std::logic_error("exactDiv: division is not exact");
+			throw Error("internal error: polynomial division is not exact");
 		Expr term = mul(exactDiv(rc.at(dr), lcb), powX(x, dr - db));
 		q = add(q, term);
 		r = expand(sub(r, expand(mul(term, b))));
@@ -218,7 +218,7 @@ Frac reduce(const Frac& f)
 	return {scale(n, s), scale(d, s)};
 }
 
-// Non-polynomial parts are replaced by fresh symbols ($1, $2, ...).
+// Non-polynomial parts are replaced by fresh symbols (~1, ~2, ...).
 struct Atoms {
 	std::vector<std::pair<Expr, std::string>> list;
 
@@ -227,7 +227,8 @@ struct Atoms {
 		for (const auto& [a, name] : list)
 			if (equal(a, e))
 				return mkSym(name);
-		list.emplace_back(e, "$" + std::to_string(list.size() + 1));
+		// '~' sorts after all names, so atoms come last in sums
+		list.emplace_back(e, "~" + std::to_string(list.size() + 1));
 		return mkSym(list.back().second);
 	}
 
@@ -236,8 +237,10 @@ struct Atoms {
 		long k;
 		switch (e->kind) {
 		case Kind::Num:
-		case Kind::Sym:
 			return e;
+		case Kind::Sym:
+			// im is kept apart: the polynomial algorithms do not know im^2 = -1
+			return isImUnit(e) ? symbolFor(e) : e;
 		case Kind::Add:
 		case Kind::Mul: {
 			Exprs a;
@@ -311,22 +314,38 @@ Frac normal(const Expr& e)
 
 } // namespace
 
+// only im is replaced by a symbol: roots and the like are not polynomials
+void onlyIm(const Expr& e, const char* who)
+{
+	Atoms atoms;
+	atoms.put(e);
+	for (const auto& atom : atoms.list)
+		if (!isImUnit(atom.first))
+			throw Error(std::string(who) + ": not a polynomial: " + toString(e));
+}
+
 Expr polyGcd(const Expr& a, const Expr& b)
 {
-	Expr x = expand(a), y = expand(b);
+	Atoms atoms;
+	Expr x = expand(atoms.put(a)), y = expand(atoms.put(b));
+	onlyIm(a, "gcd");
+	onlyIm(b, "gcd");
 	requirePolynomial(x, "gcd");
 	requirePolynomial(y, "gcd");
-	return pgcd(x, y);
+	return expand(atoms.back(pgcd(x, y)));
 }
 
 Expr polyLcm(const Expr& a, const Expr& b)
 {
-	Expr x = expand(a), y = expand(b);
+	Atoms atoms;
+	Expr x = expand(atoms.put(a)), y = expand(atoms.put(b));
+	onlyIm(a, "lcm");
+	onlyIm(b, "lcm");
 	requirePolynomial(x, "lcm");
 	requirePolynomial(y, "lcm");
 	if (isZero(x) || isZero(y))
 		return mkInt(0);
-	return normalized(exactDiv(expand(mul(x, y)), pgcd(x, y)));
+	return expand(atoms.back(normalized(exactDiv(expand(mul(x, y)), pgcd(x, y)))));
 }
 
 Expr cancel(const Expr& e)
@@ -347,7 +366,9 @@ bool isIdenticallyZero(const Expr& e)
 	if (!hasVariableDenominator(e))
 		return false; // the expanded form of a polynomial is unique
 	Atoms atoms;
-	return isZero(normal(atoms.put(e)).n);
+	Expr n = normal(atoms.put(e)).n;
+	// the atoms may still cancel once they are put back (im^2 = -1)
+	return isZero(n) || isZero(expand(atoms.back(n)));
 }
 
 } // namespace xyz

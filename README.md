@@ -48,7 +48,7 @@ The bc checkout is never modified. bcl is configured with
 ## Usage
 
 ```
-xyz [-h] [-v] [-e expr]... [file]...
+xyz [-h] [-v] [--imag=NAME] [-e expr]... [file]...
 ```
 
 * With no arguments, `xyz` reads standard input. If standard input is a
@@ -62,6 +62,9 @@ xyz [-h] [-v] [-e expr]... [file]...
 * `-e EXPR` runs `EXPR`. You can repeat it. When `-e` is used, standard
   input is only read if `-` is given as a file.
 * Files and `-e` expressions all share the same variables, and run in order.
+* `--imag=NAME` calls the imaginary unit `NAME` instead of `im`, for input
+  and output: with `--imag=i`, `(3+2i)*(1-i)` gives `5-i`, and `im` is an
+  ordinary name. `i` can then not be used as a variable or loop variable.
 * Results go to stdout and errors go to stderr (`error: line N: ...`).
   Processing continues with the next statement after an error. The exit
   status is 0 if there were no errors, 1 if there were errors, and 2 for
@@ -135,6 +138,8 @@ when the line ends with `\`. Comments are `# ... end of line` and
 (2/3)^-2         -> 9/4
 6/4              -> 3/2      (fractions are reduced with Euclid's gcd)
 2^(1/2)*2^(1/2)  -> 2        (non-integer powers stay symbolic)
+sqrt(18)         -> 3*2^(1/2) (square roots of numbers are taken exactly)
+sqrt(-4)         -> 2*im
 1/0              -> error: division by zero
 0^0              -> 1        (as in bc)
 ```
@@ -303,11 +308,58 @@ differ in *when* the values go in:
   (`2x+x` → `3*x`), equal powers (`x*x` → `x^2`) and numbers times sums.
   Nothing that removes a division is done: `x/x`, `x^2/x` and `1/x-1/x`
   (shown as `0/x`) are kept.
-* **Roots are not combined for now**: powers of a symbol only merge for
-  integer exponents. `(x^(1/2))^2`, `(x^2)^(1/2)`, `x^a*x^b` and
-  `x^(1/2)*x^(1/2)` stay as they are. Simplifying roots correctly depends
-  on which root is meant (and, with complex numbers, on the branch), which
-  will be decided together with complex numbers.
+* **Roots of symbols are not combined for now**: powers of a symbol only
+  merge for integer exponents. `(x^(1/2))^2`, `(x^2)^(1/2)`, `x^a*x^b` and
+  `x^(1/2)*x^(1/2)` stay as they are (see "Not solved yet").
+* **Roots of numbers**: square roots are taken exactly as far as square
+  factors can be found: `sqrt(8)` → `2*2^(1/2)`, `sqrt(2/9)` → `2^(1/2)/3`,
+  and `sqrt(-4)` → `2*im` (the principal value). Powers of positive numbers
+  combine: `(2^(1/2))^2` → `2`, `2^a*2^b` → `2^(a+b)`. Other roots of
+  numbers stay as they are: `8^(1/3)`.
+
+### Complex numbers
+
+`im` is the imaginary unit (as in Julia; `i`, `j` and `I` stay free for
+loops and other uses). Start xyz with `--imag=i` to call it `i` instead.
+It cannot be assigned. `im^2` is `-1`, and **all symbols are taken to be
+real**.
+
+* Exact complex numbers are always brought to the form `a+b*im`, like
+  fractions are always reduced:
+
+  ```
+  (3+im)*(5-3im)     -> 18-4*im
+  1/(1+im)           -> 1/2-im/2
+  (1+im)^10          -> 32*im
+  ```
+* With symbols, products of sums are kept, as for real sums, and `expand`
+  multiplies them out: `expand((x+im)^2)` → `x^2+2*im*x-1`.
+* `Re(z)`, `Im(z)`, `conj(z)` and `abs(z)` split `z` into its real and
+  imaginary parts. A quotient is made real by multiplying with the
+  conjugate of its denominator:
+
+  ```
+  Re(x+im*y)         -> x
+  Im((x+im*y)^2)     -> 2*x*y
+  Re(1/(x+im))       -> x/(x^2+1)
+  conj(1/(1+im))     -> 1/2+im/2
+  abs(3+4im)         -> 5
+  abs(x+im*y)        -> (x^2+y^2)^(1/2)
+  ```
+* When the parts cannot be found, the function stays as it is (and is
+  evaluated again when values are put in later):
+
+  ```
+  Re(x^(1/2))                  -> Re(x^(1/2))    (x could be negative)
+  eval(Re(x^(1/2)), x=-4)      -> 0
+  abs(x)                       -> abs(x)
+  ```
+  The parts can be found for numbers, `im`, symbols, sums, products,
+  integer powers, positive numbers to real powers (`2^(1/2)`, `2^x`) and
+  `Re`, `Im`, `abs`, `conj` themselves.
+* `num(1/3+2im/3, 5)` → `0.33333+0.66666*im`.
+* `<`, `<=`, `>` and `>=` need real numbers. `==` works: `(1+im)^2 == 2im`
+  is true.
 
 ### Comparisons and logic
 
@@ -451,10 +503,15 @@ pipes straight into gnuplot, `sort` or a spreadsheet.
 | `gcd(a, b, ...)`    | greatest common divisor of numbers or of polynomials        |
 | `lcm(a, b, ...)`    | least common multiple of numbers or of polynomials          |
 | `cancel(e)`         | `e` as one fraction with common factors cancelled           |
+| `sqrt(e)`           | `e^(1/2)`; exact for numbers where possible, `sqrt(-4)` → `2*im` |
+| `Re(z)`, `Im(z)`    | real and imaginary part (symbols are real)                  |
+| `conj(z)`           | complex conjugate                                           |
+| `abs(z)`            | absolute value                                              |
 | `disp(e, ...)`      | prints the values, separated by tabs (statement only)       |
 | `def(name)`         | prints how a variable or function is stored (statement only) |
 | `unset(name, ...)`  | removes variables and functions (statement only)            |
 | `table(...)`        | prints a table of values (statement only)                   |
+| `latex(e)`          | prints the value of `e` as LaTeX math (statement only)      |
 | `save("file")`      | writes this session's statements to a file (statement only) |
 | `transcript("file")`| the same, with each statement's output as `#` comments (statement only) |
 
@@ -524,6 +581,17 @@ b
 # error: line 4: division by zero
 ```
 
+**LaTeX.** When the file name ends in `.tex`, `transcript` writes a LaTeX
+document instead: every statement verbatim, followed by its results as
+formulas (fractions, roots, `i` for the imaginary unit, tables as arrays,
+errors in italics). `latex(e)` prints a single value as LaTeX math:
+
+```
+latex((x+1)^2/3)       -> \frac{\left(x+1\right)^{2}}{3}
+latex(sqrt(8)/x)       -> \frac{2 \sqrt{2}}{x}
+latex(alpha_1 + abs(z)) -> \alpha_{1}+\left|z\right|
+```
+
 `save` and `transcript` themselves are not recorded, and an existing file
 is overwritten. File names are written in double quotes; strings cannot
 be used for anything else. Statements with a syntax error are not
@@ -538,15 +606,41 @@ never broken into several lines, whatever their length (bc breaks lines at
 
 ## Planned
 
-* Complex numbers. The imaginary unit will be `im` (as in Julia):
-  `3+2im`, `im^2` → `-1`. That keeps `i`, `j` and `I` free for loops and
-  other uses. The functions are `Re(z)`, `Im(z)`, `conj(z)` and `abs(z)`.
-  Names are case-sensitive, so `Im` (the function) and `im` (the unit) are
-  different names. Roots and complex branches will be decided together.
-* `sin`, `cos`, `tan`, `atan`, `exp`, `ln`, `sqrt` and the constant `pi`:
-  exact where possible (`sin(0)` → `0`, `sqrt(8)` → `2*sqrt(2)`), symbolic
-  otherwise, with decimals from `num(sin(1), 50)`. These replace
-  `bc -l`'s one-letter `s`, `c`, `a`, `l`, `e`.
+* `sin`, `cos`, `tan`, `atan`, `exp`, `ln`, `log(b, x)` and the constant
+  `pi`, kept basic: exact values at the standard angles (`sin(pi/6)` →
+  `1/2`), `exp(0)` → `1`, `ln(1)` → `0`, derivatives, Euler's formula for
+  `Re`/`Im` (`Re(exp(2im))` → `cos(2)`), a `trigexpand` for addition and
+  multiple-angle formulas (`cos(12x)` in `cos(x)` and `sin(x)`), and
+  decimals with `num(sin(1), 50)`. These replace `bc -l`'s one-letter `s`,
+  `c`, `a`, `l`, `e`.
+
+## Not solved yet
+
+Things that are known to be missing or only partly done:
+
+* **Domains and assumptions.** There is no way to say that `x > 0` or that
+  `x` is an integer or complex. All symbols are taken to be real, and
+  simplifications that need more (`sqrt(x^2)` → `x` for `x >= 0`,
+  `ln(x*y)` → `ln(x)+ln(y)`) are not done. An `assume(x > 0)` would help,
+  but is a large piece of work.
+* **Roots of symbols.** `(x^(1/2))^2` is not simplified to `x`, and
+  `x^a*x^b` is not combined, even though both are true for the principal
+  values. `(x^2)^(1/2)` is `abs(x)` for real `x`, which is not used yet.
+* **Which square root?** `sqrt(-4)` gives `2*im`, the principal value
+  (the root with positive real part, or positive imaginary part for
+  negative numbers). This is what Mathematica, Maple, Julia, MATLAB and
+  Python do, but `-2*im` is just as much a square root of `-4`. The
+  convention is kept for now and may be revisited together with roots of
+  symbols.
+* **Roots of numbers** other than square roots are not computed:
+  `8^(1/3)` stays as it is. Square roots only find small square factors
+  of large numbers (factoring large numbers is hard).
+* **Splitting into real and imaginary parts** fails for roots of symbols
+  and unknown functions: `Re(x^(1/2))` stays as it is.
+* **GCD over the complex numbers.** `gcd` and `cancel` treat `im` like an
+  extra symbol, so `gcd(x^2+1, x-im)` is `1`, although `x^2+1 = (x-im)(x+im)`.
+* **`==` with roots or unknown functions** can be false for equal
+  expressions: `x^(1/2)*x^(1/2) == x` is false.
 
 ## Tests
 
@@ -558,6 +652,9 @@ never broken into several lines, whatever their length (bc breaks lines at
   checked with algebraic identities and evaluation at random points.
   `gcd(A*C, B*C)` is checked to divide both arguments and to be a
   multiple of `C`, and `cancel` to keep the value at random points.
+  Complex arithmetic and `Re`/`Im`/`conj` are checked against exact
+  complex fractions, and `Re(e) + im*Im(e) == e` for expressions with
+  symbols.
   `=` and `:=` are checked against a Python model of both semantics. A
   failure prints its seed (`--seed N`) so it can be reproduced.
 
@@ -570,6 +667,7 @@ never broken into several lines, whatever their length (bc breaks lines at
 | `src/expr.*`               | immutable, shared expression trees               |
 | `src/simplify.cpp`         | simplification, expand, diff, polynomial helpers |
 | `src/gcd.cpp`              | gcd/lcm of numbers and polynomials, cancel       |
+| `src/complex.cpp`          | Re, Im, conj, abs                                |
 | `src/print.cpp`            | expression → text                                |
 | `src/parser.*`             | lexer and recursive-descent parser               |
 | `src/interpreter.*`        | variables, functions, built-ins, statements      |

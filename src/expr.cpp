@@ -12,6 +12,15 @@ Expr make(Kind k, Rational num, std::string name, Exprs args)
 }
 } // namespace
 
+const char* const kImag = "%i";
+
+namespace {
+std::string g_imagName = "im";
+}
+
+const std::string& imagName() { return g_imagName; }
+void setImagName(const std::string& name) { g_imagName = name; }
+
 Expr mkNum(Rational r) { return make(Kind::Num, std::move(r), {}, {}); }
 Expr mkInt(long v) { return mkNum(Rational(v)); }
 Expr mkSym(std::string name) { return make(Kind::Sym, {}, std::move(name), {}); }
