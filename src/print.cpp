@@ -42,6 +42,8 @@ int prec(const Expr& n)
 			return P_NEG;
 		return n->num.isInt() ? P_ATOM : P_MUL;
 	case Kind::Dec:
+		if (n->name.find_first_of("+-", 1) != std::string::npos)
+			return P_ADD; // a complex decimal: 0.5+0.25*im
 		return n->name[0] == '-' ? P_NEG : P_ATOM;
 	case Kind::Sym:
 	case Kind::Str:
@@ -420,7 +422,23 @@ void lx(std::string& out, const Expr& n, int minPrec)
 			out += '}';
 			break;
 		}
-		if (f == "Re" || f == "Im" || f.size() > 1)
+		if (f == "exp" && n->args.size() == 1) {
+			out += "e^{";
+			lx(out, n->args[0], P_ARG);
+			out += '}';
+			break;
+		}
+		static const char* const named[][2] = {
+			{"sin", "\\sin"}, {"cos", "\\cos"}, {"tan", "\\tan"},
+			{"asin", "\\arcsin"}, {"acos", "\\arccos"}, {"atan", "\\arctan"},
+			{"ln", "\\ln"}};
+		const char* tex = nullptr;
+		for (const auto& m : named)
+			if (f == m[0])
+				tex = m[1];
+		if (tex)
+			out += tex;
+		else if (f == "Re" || f == "Im" || f.size() > 1)
 			out += "\\operatorname{" + latexText(f) + "}";
 		else
 			out += f;

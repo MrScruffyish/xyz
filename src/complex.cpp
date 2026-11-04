@@ -90,6 +90,32 @@ std::optional<Parts> split(const Expr& e)
 	case Kind::Call:
 		if (e->name == "Re" || e->name == "Im" || e->name == "abs")
 			return Parts{e, mkInt(0)};
+		if (e->name == "sin" || e->name == "cos" || e->name == "tan" ||
+		    e->name == "atan" || e->name == "exp") {
+			auto p = split(e->args[0]);
+			if (!p)
+				return std::nullopt;
+			if (knownZero(p->im)) // real for a real argument
+				return Parts{e, mkInt(0)};
+			if (e->name == "exp") { // exp(a + b*im) = exp(a)*(cos(b) + im*sin(b))
+				Expr ea = makeFunction("exp", {p->re});
+				return Parts{mul(ea, makeFunction("cos", {p->im})),
+				             mul(ea, makeFunction("sin", {p->im}))};
+			}
+			return std::nullopt; // would need sinh and cosh
+		}
+		if (e->name == "ln") { // real for a positive number
+			const Expr& v = e->args[0];
+			if (v->kind == Kind::Num && v->num.sign() > 0)
+				return Parts{e, mkInt(0)};
+			return std::nullopt;
+		}
+		if (e->name == "asin" || e->name == "acos") { // real on [-1, 1]
+			const Expr& v = e->args[0];
+			if (v->kind == Kind::Num && v->num.abs().compare(Rational(1)) <= 0)
+				return Parts{e, mkInt(0)};
+			return std::nullopt;
+		}
 		if (e->name == "conj") {
 			auto p = split(e->args[0]);
 			if (p)

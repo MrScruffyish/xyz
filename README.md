@@ -48,7 +48,7 @@ The bc checkout is never modified. bcl is configured with
 ## Usage
 
 ```
-xyz [-h] [-v] [--imag=NAME] [-e expr]... [file]...
+xyz [-h] [-v] [--imag=NAME] [--trunc] [-e expr]... [file]...
 ```
 
 * With no arguments, `xyz` reads standard input. If standard input is a
@@ -65,6 +65,7 @@ xyz [-h] [-v] [--imag=NAME] [-e expr]... [file]...
 * `--imag=NAME` calls the imaginary unit `NAME` instead of `im`, for input
   and output: with `--imag=i`, `(3+2i)*(1-i)` gives `5-i`, and `im` is an
   ordinary name. `i` can then not be used as a variable or loop variable.
+* `--trunc` makes `num()` truncate decimals like bc instead of rounding.
 * Results go to stdout and errors go to stderr (`error: line N: ...`).
   Processing continues with the next statement after an error. The exit
   status is 0 if there were no errors, 1 if there were errors, and 2 for
@@ -144,9 +145,24 @@ sqrt(-4)         -> 2*im
 0^0              -> 1        (as in bc)
 ```
 
-Results are never rounded. `num(e, digits)` gives a decimal
-approximation. It truncates like bc and defaults to 20 digits. The result
-of `num` is for display only and cannot be used in further calculations.
+Results are never rounded. `num(e, digits)` shows a decimal value with
+`digits` decimals (default 20), rounded (or truncated like bc with
+`--trunc`):
+
+```
+num(1/3)               -> 0.33333333333333333333
+num(2/3, 5)            -> 0.66667
+num(pi, 50)            -> 3.14159265358979323846264338327950288419716939937511
+num(sqrt(2) + sin(1))  -> 2.25568454718099155545
+num(exp(2im), 10)      -> -0.4161468365+0.9092974268*im
+num(x/3 + sqrt(2), 5)  -> 0.33333*x+1.41421     (symbols are kept)
+```
+
+Fractions are rounded exactly. Roots, `pi` and the functions are computed
+with bcl at extra precision (20 guard digits, more where a function needs
+it) and then rounded. Integers stay as they are (`num(2^100)`). Values with
+more than 100000 digits are refused. The result of `num` is for display
+only and cannot be used in further calculations.
 
 ### Variables: `=` stores a value, `:=` stores a formula
 
@@ -361,6 +377,55 @@ real**.
 * `<`, `<=`, `>` and `>=` need real numbers. `==` works: `(1+im)^2 == 2im`
   is true.
 
+### Elementary functions
+
+`sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `exp`, `ln`, `log(b, x)` (and
+`log(x)` = `ln(x)`), with the constant `pi` (which cannot be assigned).
+Angles are in radians. There is no constant `e`: write `exp(1)`. They are
+kept basic: exact where a standard value is known, otherwise they stay as
+they are (`sin(1)`, `ln(x)`), and `num` gives decimals.
+
+* **Exact values** at multiples of `pi/6` and `pi/4`, and the matching
+  inverse values:
+
+  ```
+  sin(pi/6)          -> 1/2
+  cos(3pi/4)         -> -2^(1/2)/2
+  tan(pi/3)          -> 3^(1/2)
+  asin(1/2)          -> pi/6
+  atan(-1)           -> -pi/4
+  tan(pi/2)          -> error: tan(pi/2) is undefined
+  ```
+* **Symmetries and periods:** `sin(-x)` → `-sin(x)`, `cos(-x)` → `cos(x)`,
+  `sin(x+pi)` → `-sin(x)`, `cos(x+2pi)` → `cos(x)`, `sin(pi-x)` → `sin(x)`,
+  `acos(-x)` → `pi-acos(x)`.
+* **exp and ln:** `exp(0)` → `1`, `ln(1)` → `0`, `exp(ln(x))` → `x`,
+  `ln(exp(x))` → `x` (symbols are real), `exp(a)*exp(b)` → `exp(a+b)`,
+  `exp(x)^n` → `exp(n*x)`, `ln(1/3)` → `-ln(3)`, `ln(-2)` → `ln(2)+im*pi`
+  (principal value), `exp(pi*im)` → `-1`, `exp(pi*im/3)` → `1/2+3^(1/2)*im/2`.
+  `exp(2im)` stays as it is (`Re`, `Im`, `conj` and `abs` use Euler's
+  formula: `Re(exp(2im))` → `cos(2)`).
+* **log:** `log(2, 8)` → `3`, `log(4, 2)` → `1/2`, otherwise
+  `log(b, x)` → `ln(x)/ln(b)`.
+* **Inverses:** `sin(asin(x))` → `x`, `cos(acos(x))` → `x`,
+  `tan(atan(x))` → `x`. (`asin(sin(x))` is only `x` for some `x`, so it
+  stays.)
+* **sin² + cos²:** `c*sin(u)^2 + c*cos(u)^2` → `c` in sums, also with other
+  factors: `3*sin(x)^2 + 3*cos(x)^2 + 1` → `4`. More general trigonometric
+  simplification is not done.
+* **Derivatives:** `diff` knows all of them, with the chain rule, and
+  powers with the variable in the exponent: `diff(2^x, x)` → `2^x*ln(2)`,
+  `diff(x^x, x)` → `x^x*(ln(x)+1)`.
+* **`trigexpand(e)`** applies the addition formulas and writes
+  `sin(n*x)`, `cos(n*x)` (integer `n`) in `sin(x)` and `cos(x)`:
+
+  ```
+  trigexpand(sin(2x))      -> 2*cos(x)*sin(x)
+  trigexpand(cos(x+y))     -> cos(x)*cos(y)-sin(x)*sin(y)
+  trigexpand(cos(3x))      -> cos(x)^3-3*cos(x)*sin(x)^2
+  trigexpand(tan(x+y))     -> (cos(x)*sin(y)+cos(y)*sin(x))/(cos(x)*cos(y)-sin(x)*sin(y))
+  ```
+
 ### Comparisons and logic
 
 `a == b` and `a != b` work on any expressions, including expressions
@@ -494,7 +559,7 @@ pipes straight into gnuplot, `sort` or a spreadsheet.
 | `eval(e, x=v, ...)` | evaluates and simplifies `e` with `x` as a symbol, then inserts the values (all at once); also plugs current values into snapshots. Assigns nothing. |
 | `subs(e, x=v, ...)` | substitutes the values first (all at once, also inside formulas), then evaluates and simplifies. Assigns nothing. |
 | `expand(e)`         | multiplies out products and integer powers of sums          |
-| `num(e[, digits])`  | decimal approximation of a number (default 20 digits, truncated) |
+| `num(e[, digits])`  | decimal value, rounded to `digits` decimals (default 20); numbers inside expressions with symbols are converted |
 | `diff(e, x[, n])`   | n-th derivative with respect to `x` (default 1)             |
 | `deg(e, x)`         | degree of the polynomial `e` in `x` (-1 for 0)              |
 | `coeff(e, x, n)`    | coefficient of `x^n` (may contain other variables)          |
@@ -504,6 +569,11 @@ pipes straight into gnuplot, `sort` or a spreadsheet.
 | `lcm(a, b, ...)`    | least common multiple of numbers or of polynomials          |
 | `cancel(e)`         | `e` as one fraction with common factors cancelled           |
 | `sqrt(e)`           | `e^(1/2)`; exact for numbers where possible, `sqrt(-4)` → `2*im` |
+| `sin`, `cos`, `tan` | trigonometric functions (radians)                           |
+| `asin`, `acos`, `atan` | inverse trigonometric functions                          |
+| `exp(e)`, `ln(e)`   | exponential function and natural logarithm                  |
+| `log(b, x)`         | logarithm to base `b`; `log(x)` is `ln(x)`                  |
+| `trigexpand(e)`     | addition and multiple-angle formulas                        |
 | `Re(z)`, `Im(z)`    | real and imaginary part (symbols are real)                  |
 | `conj(z)`           | complex conjugate                                           |
 | `abs(z)`            | absolute value                                              |
@@ -604,16 +674,6 @@ The output can be read back as input: `x^2/4+x/3+1/9`, `-x/2`,
 never broken into several lines, whatever their length (bc breaks lines at
 70 characters with a `\`), so the terminal uses its full width.
 
-## Planned
-
-* `sin`, `cos`, `tan`, `atan`, `exp`, `ln`, `log(b, x)` and the constant
-  `pi`, kept basic: exact values at the standard angles (`sin(pi/6)` →
-  `1/2`), `exp(0)` → `1`, `ln(1)` → `0`, derivatives, Euler's formula for
-  `Re`/`Im` (`Re(exp(2im))` → `cos(2)`), a `trigexpand` for addition and
-  multiple-angle formulas (`cos(12x)` in `cos(x)` and `sin(x)`), and
-  decimals with `num(sin(1), 50)`. These replace `bc -l`'s one-letter `s`,
-  `c`, `a`, `l`, `e`.
-
 ## Not solved yet
 
 Things that are known to be missing or only partly done:
@@ -641,6 +701,20 @@ Things that are known to be missing or only partly done:
   extra symbol, so `gcd(x^2+1, x-im)` is `1`, although `x^2+1 = (x-im)(x+im)`.
 * **`==` with roots or unknown functions** can be false for equal
   expressions: `x^(1/2)*x^(1/2) == x` is false.
+* **Hyperbolic functions** (`sinh`, `cosh`, `tanh` and inverses) are not
+  there yet. Because of that, `Re(sin(im*x))` and the like stay as they
+  are (numerically `num(sin(1+im))` works).
+* **Complex arguments of `asin`, `acos`, `atan`**, and `asin(2)` (which is
+  complex): no exact or decimal value yet, they stay as they are.
+* **Inverse of a function:** `asin(sin(x))` is `x` only for
+  `-pi/2 <= x <= pi/2`, so it is not simplified. That needs domains.
+* **Logarithm rules** `ln(a*b)` → `ln(a)+ln(b)` and `ln(x^n)` → `n*ln(x)`
+  are only true for positive values, so they are not done (needs domains).
+* **Trigonometric simplification** beyond `sin^2+cos^2 = 1` (e.g. writing
+  a result back with double angles) is not done.
+* **`num` has no proven error bounds.** The guard digits make a wrong
+  last digit very unlikely, but not impossible. Numbers with more than
+  100000 digits are refused.
 
 ## Tests
 
@@ -654,7 +728,10 @@ Things that are known to be missing or only partly done:
   multiple of `C`, and `cancel` to keep the value at random points.
   Complex arithmetic and `Re`/`Im`/`conj` are checked against exact
   complex fractions, and `Re(e) + im*Im(e) == e` for expressions with
-  symbols.
+  symbols. `num()` of random expressions with roots, `pi`, `exp`, `ln`,
+  `sin`, `cos` and `atan` is checked against Python's `decimal` module (with
+  its own series for the trigonometric functions), `diff` of random
+  functions against central differences, and `trigexpand` by value.
   `=` and `:=` are checked against a Python model of both semantics. A
   failure prints its seed (`--seed N`) so it can be reproduced.
 
@@ -668,6 +745,8 @@ Things that are known to be missing or only partly done:
 | `src/simplify.cpp`         | simplification, expand, diff, polynomial helpers |
 | `src/gcd.cpp`              | gcd/lcm of numbers and polynomials, cancel       |
 | `src/complex.cpp`          | Re, Im, conj, abs                                |
+| `src/elem.cpp`             | sin, cos, tan, asin, acos, atan, exp, ln, log, trigexpand |
+| `src/numeric.cpp`          | decimal values for num()                         |
 | `src/print.cpp`            | expression → text                                |
 | `src/parser.*`             | lexer and recursive-descent parser               |
 | `src/interpreter.*`        | variables, functions, built-ins, statements      |

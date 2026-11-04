@@ -110,6 +110,22 @@ Expr imagPart(const Expr& e);
 Expr conjugate(const Expr& e);
 Expr absValue(const Expr& e);
 
+// --- elementary functions (elem.cpp) -----------------------------------
+// sin cos tan asin acos atan exp ln
+bool isElementary(const std::string& name);
+// f(args) with the exact values and rules applied (also log(b, x))
+Expr makeFunction(const std::string& name, const Exprs& args);
+Expr derivativeOf(const std::string& name, const Expr& u); // f'(u)
+Expr trigexpand(const Expr& e); // addition and multiple-angle formulas
+
+// --- decimals (numeric.cpp) ------------------------------------------
+// num(): numbers (also sqrt(2), pi, sin(1), ...) as decimals with the given
+// number of decimals; inside expressions with symbols, the numbers are
+// converted and the symbols kept.
+Expr numeric(const Expr& e, size_t digits);
+void setNumTruncate(bool truncate); // --trunc: truncate like bc, not round
+void clearNumericCaches();          // before bcl shuts down
+
 // --- gcd and cancellation (gcd.cpp) ----------------------------------
 Rational gcd(const Rational& a, const Rational& b); // >= 0; gcd(a/b, c/d) = gcd(a,c)/lcm(b,d)
 Rational lcm(const Rational& a, const Rational& b); // >= 0

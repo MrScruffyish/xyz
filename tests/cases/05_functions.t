@@ -71,10 +71,10 @@ x
 3
 
 === diff errors
-diff(2^x, x)
+diff(sin(x)^x, y)
 diff(x^2, 3)
 ---
-error: line 1: diff: cannot differentiate a power with 'x' in the exponent (logarithms are not supported)
+0
 error: line 2: diff: argument 2 must be a variable name
 
 === deg and coeff

@@ -175,7 +175,8 @@ Expr withCoeff(const Rational& c, const Expr& rest)
 
 bool isSymbolicFunction(const std::string& name)
 {
-	return name == "Re" || name == "Im" || name == "conj" || name == "abs";
+	return name == "Re" || name == "Im" || name == "conj" || name == "abs" ||
+	       isElementary(name);
 }
 
 bool complexParts(const Expr& e, Rational& re, Rational& im)
@@ -223,10 +224,29 @@ Expr makeComplex(const Rational& re, const Rational& im)
 
 namespace {
 
+// symbols other than im and pi?
+bool hasVariable(const Expr& e)
+{
+	if (e->kind == Kind::Sym)
+		return !isImUnit(e) && e->name != "pi";
+	for (const Expr& a : e->args)
+		if (hasVariable(a))
+			return true;
+	return false;
+}
+
+// the imaginary part of a complex number: b*im without variables
+// (3^(1/2)*im/2), so that it is written last: 1/2+3^(1/2)*im/2
 bool isImTerm(const Expr& t)
 {
-	return isImUnit(t) || (t->kind == Kind::Mul && t->args.size() == 2 &&
-	                       t->args[0]->kind == Kind::Num && isImUnit(t->args[1]));
+	if (isImUnit(t))
+		return true;
+	if (t->kind != Kind::Mul || hasVariable(t))
+		return false;
+	for (const Expr& f : t->args)
+		if (isImUnit(f))
+			return true;
+	return false;
 }
 
 // n = s^2 * t with t as small as we can find cheaply (small primes and a
@@ -264,12 +284,13 @@ Expr rootPow(const Rational& v, long sgn)
 	BigInt s, t;
 	squareFactor(v.numerator() * v.denominator(), s, t);
 	Rational c(s, v.denominator());
-	if (sgn < 0)
-		c = Rational(1) / c;
+	Rational tr(t, BigInt(1L));
+	if (sgn < 0) // 1/(c*sqrt(t)) = sqrt(t)/(c*t): roots stay in the numerator
+		c = Rational(1) / (t.isOne() ? c : c * tr);
 	if (t.isOne())
 		return mkNum(c);
 	// built directly (not simplified again, which would come back here)
-	Expr r = mkPow(mkNum(Rational(t, BigInt(1L))), mkNum(Rational(sgn) / Rational(2)));
+	Expr r = mkPow(mkNum(tr), mkNum(Rational(1) / Rational(2)));
 	return c.isOne() ? r : mkNode(Kind::Mul, {mkNum(c), r});
 }
 
@@ -307,6 +328,55 @@ Expr sub(const Expr& a, const Expr& b) { return add(a, mul(mkInt(-1), b)); }
 
 // ------------------------------------------------------------------ sums
 
+namespace {
+
+// c*R*sin(u)^2 + c*R*cos(u)^2 -> c*R  (R: the other factors, maybe none)
+template <class Terms>
+void sinCosSquares(Terms& terms, Rational& konst)
+{
+	auto squareOf = [](const Expr& f, const char* name) {
+		return f->kind == Kind::Pow && isNumber(f->args[1], 2) &&
+		       f->args[0]->kind == Kind::Call && f->args[0]->name == name;
+	};
+	// replaces one pair; false when there is none left
+	auto onePair = [&]() {
+		for (auto it = terms.begin(); it != terms.end(); ++it) {
+			const Expr rest = it->first;
+			Exprs fs = rest->kind == Kind::Mul ? rest->args : Exprs{rest};
+			for (size_t i = 0; i < fs.size(); i++) {
+				if (!squareOf(fs[i], "sin"))
+					continue;
+				Exprs other = fs;
+				other[i] = mkPow(mkCall("cos", fs[i]->args[0]->args), mkInt(2));
+				auto jt = terms.find(simpMul(other));
+				if (jt == terms.end() || jt->second.compare(it->second) != 0)
+					continue;
+				Rational c = it->second;
+				Exprs remaining = fs;
+				remaining.erase(remaining.begin() + static_cast<long>(i));
+				terms.erase(jt);
+				terms.erase(it); // not used after this
+				if (remaining.empty()) {
+					konst = konst + c;
+				} else {
+					Expr r = simpMul(remaining);
+					auto kt = terms.find(r);
+					if (kt == terms.end())
+						terms.emplace(r, c);
+					else
+						kt->second = kt->second + c;
+				}
+				return true;
+			}
+		}
+		return false;
+	};
+	while (onePair()) {
+	}
+}
+
+} // namespace
+
 Expr simpAdd(const Exprs& in)
 {
 	Rational konst;
@@ -331,6 +401,7 @@ Expr simpAdd(const Exprs& in)
 		else
 			it->second = it->second + c;
 	}
+	sinCosSquares(terms, konst);
 	Exprs out;
 	for (auto& [rest, c] : terms) {
 		if (c.isZero()) {
@@ -341,18 +412,14 @@ Expr simpAdd(const Exprs& in)
 		out.push_back(c.isOne() ? rest : withCoeff(c, rest));
 	}
 	std::sort(out.begin(), out.end(), termBefore);
-	// a complex number reads a+b*im: the im term goes after the constant
-	Expr imTerm;
-	for (auto it = out.begin(); it != out.end(); ++it)
-		if (isImTerm(*it)) {
-			imTerm = *it;
-			out.erase(it);
-			break;
-		}
+	// a complex number reads a+b*im: the im terms go after the constant
+	Exprs imTerms, rest;
+	for (const Expr& t : out)
+		(isImTerm(t) ? imTerms : rest).push_back(t);
+	out = rest;
 	if (!konst.isZero())
 		out.push_back(mkNum(konst));
-	if (imTerm)
-		out.push_back(imTerm);
+	out.insert(out.end(), imTerms.begin(), imTerms.end());
 	if (out.empty())
 		return mkInt(0);
 	if (out.size() == 1)
@@ -436,6 +503,22 @@ Expr simpMul(const Exprs& in)
 				others.push_back(makeComplex(re, imv));
 			}
 			out = others;
+		}
+	}
+	{
+		// exp(a)*exp(b) -> exp(a+b)
+		Exprs args, rest;
+		for (const Expr& f : out) {
+			if (f->kind == Kind::Call && f->name == "exp")
+				args.push_back(f->args[0]);
+			else
+				rest.push_back(f);
+		}
+		if (args.size() > 1) {
+			Expr e = makeFunction("exp", {simpAdd(args)});
+			rest.push_back(mkNum(coeff));
+			rest.push_back(e);
+			return simpMul(rest);
 		}
 	}
 	if (coeff.isZero() && !(g_safe && !out.empty() && hasDenominator(mkNode(Kind::Mul, out))))
@@ -522,6 +605,8 @@ Expr simpPow(const Expr& b, const Expr& e)
 		// x^(-1/2) -> (x^(1/2))^-1, so that it cancels against x^(1/2)
 		if (!eint && e->num.sign() < 0)
 			return mkPow(simpPow(b, mkNum(-e->num)), mkInt(-1));
+		if (eint && b->kind == Kind::Call && b->name == "exp") // exp(u)^k = exp(k*u)
+			return makeFunction("exp", {mul(e, b->args[0])});
 		if (eint) {
 			// (a^k)^n -> a^(k*n) only for integer k: (x^(1/2))^2 is
 			// not simplified to x (roots are decided later)
@@ -704,10 +789,21 @@ Expr diff(const Expr& n, const std::string& x)
 	case Kind::Pow: {
 		const Expr& b = n->args[0];
 		const Expr& e = n->args[1];
-		if (containsSym(e, x))
-			throw Error("diff: cannot differentiate a power with '" + x +
-			            "' in the exponent (logarithms are not supported)");
+		if (containsSym(e, x)) // d(b^e) = b^e * (e'*ln(b) + e*b'/b)
+			return mul(n, add(mul(diff(e, x), makeFunction("ln", {b})),
+			                  mul(e, mul(diff(b, x), simpPow(b, mkInt(-1))))));
 		return simpMul({e, simpPow(b, sub(e, mkInt(1))), diff(b, x)});
+	}
+	case Kind::Call: {
+		bool dependsOnX = false;
+		for (const Expr& a : n->args)
+			dependsOnX = dependsOnX || containsSym(a, x);
+		if (!dependsOnX)
+			return mkInt(0);
+		if (!isElementary(n->name))
+			throw Error("diff: cannot differentiate " + n->name + "()");
+		const Expr& u = n->args[0];
+		return mul(derivativeOf(n->name, u), diff(u, x)); // chain rule
 	}
 	default:
 		throw Error("diff: unsupported expression");

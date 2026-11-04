@@ -31,7 +31,7 @@ latex(num(1/3+2im/3, 3))
 \alpha_{1}^{2}+\beta \gamma+\mathrm{abc}+x_{\mathrm{max}}
 \operatorname{Re}\left(\sqrt{x}\right)+\left|x\right|+\overline{\sqrt{z}}
 \frac{1}{2}-\frac{i}{2}
-0.333+0.666\,i
+0.333+0.667\,i
 
 === stored formulas with comparisons
 c := x < 3 && y != 2;

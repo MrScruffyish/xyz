@@ -11,6 +11,8 @@
   6. quo/rem satisfy  A = Q*B + R  with deg R < deg B
      gcd(A*C, B*C) divides both and is a multiple of C; cancel keeps values
   7. complex arithmetic and Re/Im/conj vs exact complex fractions
+     num() vs Python's decimal module; diff vs central differences;
+     trigexpand keeps the value
   8. '=' snapshots and ':=' formulas vs a Python model
 
 usage: random_tests.py [binary] [--count N] [--seed S]
@@ -455,6 +457,182 @@ def test_complex_symbols(binary, rng, count):
             fail("complex identity", f"{line} -> {g}")
 
 
+# ------------------------------------------------- decimals of functions
+
+import decimal
+import functools
+from decimal import Decimal as D
+
+ORACLE_PREC = 70
+
+
+@functools.lru_cache(maxsize=None)
+def d_pi():
+    """pi by Machin's formula, in Python's decimal module."""
+    def atan_inv(n):
+        s, t, k, sign = D(0), D(1) / n, 1, 1
+        while t != 0:
+            s += sign * t / k
+            t /= n * n
+            k += 2
+            sign = -sign
+        return s
+    return 16 * atan_inv(5) - 4 * atan_inv(239)
+
+
+def d_sin_cos(x):
+    p = d_pi()
+    n = (x / (p / 2)).to_integral_value()
+    r = x - n * p / 2
+    s, c, t, k = D(0), D(0), r, 1
+    while abs(t) > D(10) ** (-ORACLE_PREC - 5):
+        s += t
+        t = -t * r * r / ((k + 1) * (k + 2))
+        k += 2
+    t, k = D(1), 0
+    while abs(t) > D(10) ** (-ORACLE_PREC - 5):
+        c += t
+        t = -t * r * r / ((k + 1) * (k + 2))
+        k += 2
+    q = int(n) % 4
+    return [(s, c), (c, -s), (-s, -c), (-c, s)][q]
+
+
+def d_atan(x):
+    if x < 0:
+        return -d_atan(-x)
+    if x > 1:
+        return d_pi() / 2 - d_atan(1 / x)
+    r = 0
+    while x > D("0.1"):
+        x = x / (1 + (1 + x * x).sqrt())
+        r += 1
+    s, t, k, sign = D(0), x, 1, 1
+    while abs(t) > D(10) ** (-ORACLE_PREC - 5):
+        s += sign * t / k
+        t *= x * x
+        k += 2
+        sign = -sign
+    return s * 2 ** r
+
+
+def gen_const(rng, depth):
+    """(xyz text, decimal function) for a random real constant."""
+    if depth == 0 or rng.random() < 0.25:
+        r = rng.random()
+        if r < 0.15:
+            return "pi", d_pi
+        a, b = rng.randint(1, 20), rng.randint(1, 9)
+        v = D(a) / D(b)
+        return f"({a}/{b})", (lambda v=v: v)
+    kind = rng.choice(["+", "*", "/", "sqrt", "exp", "ln", "sin", "cos",
+                       "atan", "pow"])
+    a, fa = gen_const(rng, depth - 1)
+    if kind in "+*/":
+        b, fb = gen_const(rng, depth - 1)
+        ops = {"+": lambda: fa() + fb(), "*": lambda: fa() * fb(),
+               "/": lambda: fa() / fb()}
+        return f"({a}{kind}{b})", ops[kind]
+    if kind == "sqrt":
+        return f"sqrt({a}*{a})", lambda: abs(fa())
+    if kind == "exp":
+        return f"exp({a}/10)", lambda: (fa() / 10).exp()
+    if kind == "ln":
+        return f"ln(1+{a}*{a})", lambda: (1 + fa() * fa()).ln()
+    if kind == "sin":
+        return f"sin({a})", lambda: d_sin_cos(fa())[0]
+    if kind == "cos":
+        return f"cos({a})", lambda: d_sin_cos(fa())[1]
+    if kind == "atan":
+        return f"atan({a})", lambda: d_atan(fa())
+    k = rng.randint(2, 5)
+    return f"(1+{a}*{a})^(1/{k})", lambda: (1 + fa() * fa()) ** (D(1) / k)
+
+
+def test_num(binary, rng, count):
+    decimal.getcontext().prec = ORACLE_PREC
+    exprs, want = [], []
+    while len(exprs) < count:
+        e, fe = gen_const(rng, rng.randint(1, 4))
+        try:
+            v = fe()
+        except (decimal.DivisionByZero, decimal.InvalidOperation, ZeroDivisionError):
+            continue
+        if abs(v) > D(10) ** 30:
+            continue
+        exprs.append(e)
+        want.append(v)
+    got = xyz(binary, [f"num({e}, 30)" for e in exprs])
+    for e, w, g in zip(exprs, want, got):
+        try:
+            have = D(g)
+        except decimal.InvalidOperation:
+            fail("num", f"{e}: {g}")
+            continue
+        if abs(have - w) > D(10) ** -30 * D("0.6"):  # half a unit, and a bit
+            fail("num", f"{e}: expected {w:.32f}, got {g}")
+
+
+def gen_fun(rng, depth, in_exp=False):
+    """a random function of x built from the elementary functions
+    (no exp inside exp: exp(exp(exp(x))) has thousands of digits)"""
+    if depth == 0 or rng.random() < 0.25:
+        return rng.choice(["x", "x^2", f"({rng.randint(1, 5)}*x)", "(x+1)"])
+    choices = ["sin", "cos", "atan", "ln", "*", "+", "/"] + ([] if in_exp else ["exp"])
+    f = rng.choice(choices)
+    a = gen_fun(rng, depth - 1, in_exp or f == "exp")
+    if f in "*+/":
+        b = gen_fun(rng, depth - 1, in_exp)
+        return f"({a}{f}{b})"
+    if f == "ln":
+        return f"ln(1+({a})^2)"
+    return f"{f}({a})"
+
+
+def test_diff_numeric(binary, rng, count):
+    """diff(f) at a point agrees with a central difference."""
+    # The central difference is off by about h^2 times the third
+    # derivative / 6: with h = 10^-20 that is far below the tolerance, and
+    # 40 digits (+ 20 guard digits) cover the cancellation in f(a+h)-f(a-h).
+    h = "1/10^20"
+    lines = []
+    for _ in range(count):
+        f = gen_fun(rng, rng.randint(1, 3))
+        a = f"{rng.randint(1, 9)}/{rng.randint(2, 9)}"
+        # eval: diff gives an expression in x, then x is set
+        lines.append(f"num(eval(diff({f}, x), x={a}), 40)")
+        lines.append(f"num(eval(diff({f}, x), x={a}) - (subs({f}, x={a}+{h}) - "
+                     f"subs({f}, x={a}-{h}))/(2*{h}), 40)")
+    out = xyz(binary, lines)
+    for k in range(count):
+        deriv, delta = out[2 * k], out[2 * k + 1]
+        try:
+            ok = abs(D(delta)) <= D(10) ** -15 * max(D(1), abs(D(deriv)))
+        except decimal.InvalidOperation:
+            ok = "division by zero" in delta
+        if not ok:
+            fail("diff (numeric)", f"{lines[2 * k + 1]} -> {delta}")
+
+
+def test_trigexpand(binary, rng, count):
+    """trigexpand keeps the value."""
+    lines = []
+    for _ in range(count):
+        f = rng.choice(["sin", "cos", "tan"])
+        n = rng.randint(2, 7)
+        u = f"{rng.randint(1, 9)}/{rng.randint(2, 9)}"
+        v = f"{rng.randint(1, 9)}/{rng.randint(2, 9)}"
+        arg = rng.choice([f"{n}*y", f"y+z", f"{n}*y+z"])
+        lines.append(f"num(subs(trigexpand({f}({arg})) - {f}({arg}), y={u}, z={v}), 30)")
+    for line, g in zip(lines, xyz(binary, lines)):
+        try:
+            ok = abs(D(g)) <= D(10) ** -29
+        except decimal.InvalidOperation:
+            ok = False
+        if not ok:
+            fail("trigexpand", f"{line} -> {g}")
+
+
 # ---------------------------------------------- variables: '=' and ':='
 
 def test_links(binary, rng, count):
@@ -553,7 +731,8 @@ def main():
     print(f"random tests, seed {seed} (rerun with --seed {seed})")
     tests = [test_numbers, test_division_by_zero, test_vs_bc, test_expand,
              test_eval, test_diff, test_division, test_gcd, test_cancel,
-             test_complex, test_complex_symbols, test_links]
+             test_complex, test_complex_symbols, test_num, test_diff_numeric,
+             test_trigexpand, test_links]
     for t in tests:
         before = failures
         t(a.binary, rng, a.count)

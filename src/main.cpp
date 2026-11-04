@@ -40,7 +40,7 @@ const char* const kVersion = "0.1.0";
 
 void usage(std::ostream& out)
 {
-	out << "usage: xyz [-h] [-v] [--imag=NAME] [-e expr]... [file]...\n"
+	out << "usage: xyz [-h] [-v] [--imag=NAME] [--trunc] [-e expr]... [file]...\n"
 	       "\n"
 	       "Reads statements from the files (or standard input). A statement\n"
 	       "prints its result unless it ends with ';'.\n"
@@ -49,6 +49,8 @@ void usage(std::ostream& out)
 	       "                         is then only read if '-' is given as a file\n"
 	       "      --imag=NAME        call the imaginary unit NAME instead of im,\n"
 	       "                         e.g. --imag=i\n"
+	       "      --trunc            num() truncates decimals like bc instead of\n"
+	       "                         rounding\n"
 	       "  -h, --help             show this help\n"
 	       "  -v, --version          show version and license\n"
 	       "\n"
@@ -60,7 +62,8 @@ void usage(std::ostream& out)
 	       "Functions: eval(e, x=v, ...), subs(e, x=v, ...), expand(e), num(e[, digits]),\n"
 	       "  diff(e, x[, n]), deg(e, x), coeff(e, x, n), quo(p, q, x), rem(p, q, x),\n"
 	       "  gcd(a, b, ...), lcm(a, b, ...), cancel(e), sqrt(e), Re(z), Im(z),\n"
-	       "  conj(z), abs(z)   (im is the imaginary unit)\n"
+	       "  conj(z), abs(z) (im is the imaginary unit), sin, cos, tan, asin, acos,\n"
+	       "  atan, exp, ln, log(b, x), trigexpand(e), pi\n"
 	       "Statements: disp(e, ...), def(a), unset(a, ...),\n"
 	       "  table(e, ..., x = 1 to 10 [step s], ...), latex(e), save(\"file\"),\n"
 	       "  transcript(\"file\") (LaTeX if the name ends in .tex), quit\n";
@@ -155,6 +158,8 @@ int realMain(int argc, char** argv)
 				return 2;
 			}
 			exprs.push_back(argv[i]);
+		} else if (a == "--trunc") {
+			xyz::setNumTruncate(true);
 		} else if (a == "--imag" || a.rfind("--imag=", 0) == 0) {
 			std::string name;
 			if (a == "--imag") {
@@ -169,7 +174,7 @@ int realMain(int argc, char** argv)
 			bool ok = !name.empty() && (std::isalpha(static_cast<unsigned char>(name[0])) || name[0] == '_');
 			for (char ch : name)
 				ok = ok && (std::isalnum(static_cast<unsigned char>(ch)) || ch == '_');
-			if (!ok || xyz::isKeyword(name)) {
+			if (!ok || xyz::isKeyword(name) || name == "pi") {
 				std::cerr << "xyz: --imag: '" << name << "' cannot be used as a name\n";
 				return 2;
 			}
@@ -215,6 +220,7 @@ int realMain(int argc, char** argv)
 			}
 			errors += interp.run(readAll(in));
 		}
+		xyz::clearNumericCaches();
 	} // all numbers must be freed before bcl shuts down
 	return errors ? 1 : 0;
 }

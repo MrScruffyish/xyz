@@ -39,6 +39,16 @@ const Builtin builtins[] = {
 	{"conj", 1, 1, -1, -1, false},
 	{"abs", 1, 1, -1, -1, false},
 	{"sqrt", 1, 1, -1, -1, false},
+	{"sin", 1, 1, -1, -1, false},
+	{"cos", 1, 1, -1, -1, false},
+	{"tan", 1, 1, -1, -1, false},
+	{"asin", 1, 1, -1, -1, false},
+	{"acos", 1, 1, -1, -1, false},
+	{"atan", 1, 1, -1, -1, false},
+	{"exp", 1, 1, -1, -1, false},
+	{"ln", 1, 1, -1, -1, false},
+	{"log", 1, 2, -1, -1, false},
+	{"trigexpand", 1, 1, -1, -1, false},
 	{"disp", 1, 1000, -1, -1, true},
 	{"def", 1, 1, -1, -1, true},
 	{"unset", 1, 1000, -1, -1, true},
@@ -61,6 +71,8 @@ void checkNotReserved(const std::string& name)
 {
 	if (name == imagName())
 		throw Error("'" + name + "' is the imaginary unit and cannot be assigned");
+	if (name == "pi")
+		throw Error("'pi' is a constant and cannot be assigned");
 }
 
 bool isOperator(const std::string& n)
@@ -111,6 +123,8 @@ const std::string& varName(const Expr& c, size_t i)
 		            " must be a variable name");
 	if (isImUnit(a))
 		throw Error(c->name + ": '" + imagName() + "' is the imaginary unit, not a variable");
+	if (a->name == "pi")
+		throw Error(c->name + ": 'pi' is a constant, not a variable");
 	return a->name;
 }
 
@@ -235,8 +249,8 @@ Expr Interpreter::resolve(const Expr& e, const Ctx& c)
 
 Expr Interpreter::lookup(const Expr& sym, const Ctx& c)
 {
-	if (isImUnit(sym))
-		return sym; // the imaginary unit never has a value
+	if (isImUnit(sym) || sym->name == "pi")
+		return sym; // constants never have a value
 	const std::string& name = sym->name;
 	if (c.lex) {
 		auto it = c.lex->find(name);
@@ -428,6 +442,14 @@ Expr Interpreter::callBuiltin(const Expr& e, const Ctx& c)
 		return absValue(resolve(e->args[0], c));
 	if (name == "sqrt")
 		return simpPow(resolve(e->args[0], c), mkNum(Rational(1) / Rational(2)));
+	if (name == "trigexpand")
+		return trigexpand(resolve(e->args[0], c));
+	if (isElementary(name) || name == "log") {
+		Exprs a;
+		for (const Expr& x : e->args)
+			a.push_back(resolve(x, c));
+		return makeFunction(name, a);
+	}
 	if (name == "gcd" || name == "lcm") {
 		Exprs v;
 		bool numbers = true;
@@ -450,18 +472,7 @@ Expr Interpreter::callBuiltin(const Expr& e, const Ctx& c)
 	}
 	if (name == "num") {
 		long digits = n > 1 ? intArg(e, 1, c, 0, 1000000) : 20;
-		Expr v = resolve(e->args[0], c);
-		Rational re, im;
-		if (!complexParts(v, re, im))
-			throw Error("num: not a number: " + toString(v));
-		size_t d = static_cast<size_t>(digits);
-		std::string s = im.isZero() || !re.isZero() ? re.toDecimal(d) : "";
-		if (!im.isZero()) {
-			std::string i = im.abs().toDecimal(d);
-			s += im.sign() < 0 ? "-" : (s.empty() ? "" : "+");
-			s += (i == "1" ? "" : i + "*") + imagName();
-		}
-		return mkDec(s);
+		return numeric(resolve(e->args[0], c), static_cast<size_t>(digits));
 	}
 	if (name == "diff") {
 		const std::string& x = varName(e, 1);

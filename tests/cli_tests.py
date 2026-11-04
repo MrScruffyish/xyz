@@ -187,6 +187,13 @@ def main():
         else:
             print("skipping pdflatex check (not installed)")
 
+        check("--trunc truncates like bc",
+              run(b, ["--trunc", "-e", "disp(num(2/3, 5), num(pi, 4), num(-2/3, 3))"]),
+              ("0.66666\t3.1415\t-0.666\n", "", 0))
+        check("without --trunc num rounds",
+              run(b, ["-e", "disp(num(2/3, 5), num(pi, 4), num(-2/3, 3))"]),
+              ("0.66667\t3.1416\t-0.667\n", "", 0))
+
         # --imag=NAME
         check("--imag=i: input and output use i",
               run(b, ["--imag=i", "-e", "disp((3+2i)*(1-i), Re(1/(x+i)), num(i/3, 3))"]),
