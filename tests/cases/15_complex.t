@@ -181,13 +181,54 @@ error: line 6: unset: 'im' is the imaginary unit, not a variable
 1
 error: line 3: cannot compare 3+im < 4: both sides must be numbers
 
-=== gcd and cancel keep im apart
+=== gcd and cancel over Q(i)
 gcd(x-im, x-im)
 cancel((x^2+1)/(x-im))
 cancel(1/(x-im) - 1/(x+im))
 1/(x-im) - (x+im)/(x^2+1) == 0
 ---
 x-im
-(x^2+1)/(x-im)
+x+im
 2*im/(x^2+1)
 1
+
+=== gcd, cancel and factor over Q(i)
+gcd(x^2+1, x-im)
+gcd(x^2+1, x^2+2*im*x-1)
+gcd(x^2-1, x-1)
+cancel((x^2+2*im*x-1)/(x^2+1))
+factor(x^2+1)
+factor(x^2+1, im)
+factor(x^4+1, im)
+factor(x^2+2*im*x-1)
+factor(x^4-1, im)
+factor(2x^2+2, im)
+factor(x^3-im)
+factor((x^2+1)/(x-im))
+factor(1/(x^2+1), im)
+factor(x^2+x+1, im)
+factor(x^4+4, im)
+factor(x^2+y^2, im)
+factor(x^3+x*y^2, im)
+factor([x^2+1, x^4+1], im)
+factor(x^2+1, 2)
+---
+x-im
+x+im
+x-1
+(x+im)/(x-im)
+x^2+1
+(x+im)*(x-im)
+(x^2+im)*(x^2-im)
+(x+im)^2
+(x-1)*(x+1)*(x+im)*(x-im)
+2*(x+im)*(x-im)
+(x+im)*(x^2-im*x-1)
+x+im
+1/((x+im)*(x-im))
+x^2+x+1
+(x-1+im)*(x-1-im)*(x+1+im)*(x+1-im)
+(x-im*y)*(x+im*y)
+x*(x-im*y)*(x+im*y)
+[(x+im)*(x-im), (x^2+im)*(x^2-im)]
+error: line 19: factor: the second argument can only be im, to factor over the complex rationals

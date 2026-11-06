@@ -15,7 +15,7 @@
      trigexpand and trigreduce keep the value
      factor: primes / same value; solve: the solutions make p zero,
      linear systems with known solutions; integrate: d/dx of the result;
-     taylor: close to the function
+     taylor: close to the function; factor over Q(i): same value, split
   8. '=' snapshots and ':=' formulas vs a Python model
 
 usage: random_tests.py [binary] [--count N] [--seed S]
@@ -875,6 +875,32 @@ def test_taylor(binary, rng, count):
             fail("taylor", f"taylor({f}, x = {a}, 5): f - T = {g}")
 
 
+def test_factor_gauss(binary, rng, count):
+    """factor(p, im) of products of factors with coefficients a+b*im has
+    the value of p, and splits into at least as many factors."""
+    polys, nfac = [], []
+    for _ in range(count):
+        fs = []
+        for _ in range(rng.randint(1, 3)):
+            a, b = rng.randint(-3, 3), rng.randint(-3, 3)
+            c = rng.randint(1, 5)  # x^2 + c^2 = (x - c*im)(x + c*im)
+            fs.append(rng.choice([f"(x+({a})+({b})*im)", f"(x^2+{c * c})"]))
+        polys.append("*".join(fs))
+        nfac.append(sum(1 if "im" in f else 2 for f in fs))  # x^2+c splits in two
+    got = xyz(binary, [f"factor(expand({p}), im)" for p in polys])
+    checks = [f"expand(({g}) - ({p}))" for p, g in zip(polys, got)]
+    for p, g, n, c in zip(polys, got, nfac, xyz(binary, checks)):
+        if c != "0":
+            fail("factor over Q(i)", f"{p} -> {g}: difference {c}")
+            continue
+        # count the factors (with multiplicities) in the printed product
+        count_ = 0
+        for part in re.findall(r"\([^()]*\)(?:\^(\d+))?|(?<![\w)])x(?:\^(\d+))?(?![\w(])", g):
+            count_ += int(part[0] or part[1] or 1)
+        if count_ < n:
+            fail("factor over Q(i)", f"{p} -> {g}: {count_} factors, expected {n}")
+
+
 # ---------------------------------------------- variables: '=' and ':='
 
 def test_links(binary, rng, count):
@@ -976,7 +1002,7 @@ def main():
              test_complex, test_complex_symbols, test_num, test_diff_numeric,
              test_trigexpand, test_trigreduce, test_factor_int,
              test_factor_poly, test_solve, test_linear_systems,
-             test_integrate, test_taylor, test_links]
+             test_integrate, test_taylor, test_factor_gauss, test_links]
     for t in tests:
         before = failures
         t(a.binary, rng, a.count)

@@ -2,8 +2,9 @@
 # Copyright (C) 2026 Gunnar Lindholm
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-# Location of the bc source tree (https://github.com/gavinhoward/bc).
-BC_DIR ?= ../bc
+# Location of the bc source tree (https://github.com/gavinhoward/bc): the
+# first of ../bc and ../ExternalRepos/bc that exists, unless given.
+BC_DIR ?= $(or $(patsubst %/configure.sh,%,$(firstword $(wildcard ../bc/configure.sh ../ExternalRepos/bc/configure.sh))),../bc)
 BUILD  ?= build
 
 CXX      ?= c++

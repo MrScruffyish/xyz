@@ -1101,11 +1101,81 @@ Factored factorPolynomial(const Expr& p)
 	return r;
 }
 
-Expr factor(const Expr& e)
+// factors over Q(i), for a polynomial (or fraction) in one symbol; null
+// when that does not apply
+// gaussianFactor, also for homogeneous polynomials in two symbols:
+// x^2 + y^2 = (x - im*y)*(x + im*y), from x^2 + 1 with y = 1
+bool gaussianFactor2(const Expr& p, Expr& content, std::vector<std::pair<Expr, long>>& parts)
+{
+	if (gaussianFactor(p, content, parts))
+		return true;
+	std::set<std::string> vs;
+	symbols(p, vs);
+	vs.erase(kImag);
+	long total;
+	if (vs.size() != 2 || !isHomogeneous(p, total))
+		return false;
+	std::string x = *vs.begin(), y = *vs.rbegin();
+	if (!gaussianFactor(substitute(p, y, mkInt(1)), content, parts))
+		return false;
+	long sum = 0;
+	for (auto& [f, m] : parts) { // f(x) of degree d -> y^d f(x/y)
+		long d = polyDegree(f, x);
+		f = expand(mul(simpPow(mkSym(y), mkInt(d)), substitute(f, x, mul(mkSym(x), simpPow(mkSym(y), mkInt(-1))))));
+		sum += d * m;
+	}
+	if (sum < total)
+		parts.emplace_back(mkSym(y), total - sum);
+	return true;
+}
+
+Expr factorGaussian(const Expr& e, Expr p, Expr q)
+{
+	Expr g, qp, qq;
+	if (gaussianGcd(p, q, g) && g->kind != Kind::Num && gaussianQuotient(p, g, qp) &&
+	    gaussianQuotient(q, g, qq)) { // common factors over Q(i) first
+		p = qp;
+		q = qq;
+	}
+	Expr cp = p, cq = q;
+	std::vector<std::pair<Expr, long>> pp, pq;
+	Rational re, im;
+	if (!complexParts(p, re, im) && !gaussianFactor2(p, cp, pp))
+		return nullptr;
+	if (containsSym(q, kImag) || q->kind != Kind::Num) {
+		if (!gaussianFactor2(q, cq, pq)) {
+			Rational a, b;
+			if (!complexParts(q, a, b))
+				return nullptr;
+			cq = q; // a number a + b*im
+		}
+	}
+	Expr content = mul(cp, simpPow(cq, mkInt(-1)));
+	auto byOrder = [](const auto& a, const auto& b) { return compare(a.first, b.first) < 0; };
+	std::sort(pp.begin(), pp.end(), byOrder);
+	std::sort(pq.begin(), pq.end(), byOrder);
+	Exprs shown;
+	if (!isNumber(content, 1))
+		shown.push_back(content);
+	for (const auto& [f, m] : pp)
+		shown.push_back(m == 1 ? f : mkPow(f, mkInt(m)));
+	for (const auto& [f, m] : pq)
+		shown.push_back(mkPow(f, mkInt(-m)));
+	if (shown.size() == 1 && shown[0]->kind != Kind::Pow && pq.empty())
+		return shown[0]; // nothing to show factored: x+im
+	return mkHeld(shown.size() == 1 ? shown[0] : mkNode(Kind::Mul, shown), e);
+}
+
+Expr factor(const Expr& e, bool overGaussian)
 {
 	if (e->kind == Kind::Num)
 		return factorNumber(e->num);
 	auto [p, q] = cancelParts(e);
+	if (overGaussian || containsSym(e, kImag)) {
+		Expr r = factorGaussian(e, p, q);
+		if (r)
+			return r;
+	}
 	Factored fp = factorPolynomial(p), fq = factorPolynomial(q);
 	Expr content = mkNum(fp.content / fq.content);
 	// quadratics in one symbol with roots in their coefficients:

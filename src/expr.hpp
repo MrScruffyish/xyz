@@ -150,7 +150,7 @@ Expr trigreduce(const Expr& e); // products and powers of sin/cos as sums
 // factor(): numbers into primes (2^3*3*5), polynomials and fractions of
 // polynomials into factors over the rationals. The result is a Held node
 // (or e itself when nothing factors).
-Expr factor(const Expr& e);
+Expr factor(const Expr& e, bool overGaussian = false); // also over Q(i)
 struct Factored {
 	Rational content;                         // a number
 	std::vector<std::pair<Expr, long>> parts; // factor, multiplicity
@@ -222,6 +222,14 @@ Expr polyLcm(const Expr& a, const Expr& b);
 Expr cancel(const Expr& e);
 // cancel(e) as numerator and denominator, both expanded
 std::pair<Expr, Expr> cancelParts(const Expr& e);
+// Over Q(i), for polynomials in one symbol with coefficients a + b*im
+// (gauss.cpp); false when that does not apply:
+// the monic gcd (used by gcd and cancel when im appears)
+bool gaussianGcd(const Expr& a, const Expr& b, Expr& result);
+// a/b when b divides a
+bool gaussianQuotient(const Expr& a, const Expr& b, Expr& q);
+// p = content * product of monic factor^multiplicity, irreducible over Q(i)
+bool gaussianFactor(const Expr& p, Expr& content, std::vector<std::pair<Expr, long>>& parts);
 // Is e identically zero (after bringing it to one fraction)?
 bool isIdenticallyZero(const Expr& e);
 

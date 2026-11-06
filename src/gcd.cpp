@@ -326,6 +326,9 @@ void onlyIm(const Expr& e, const char* who)
 
 Expr polyGcd(const Expr& a, const Expr& b)
 {
+	Expr g;
+	if (gaussianGcd(a, b, g)) // over Q(i): gcd(x^2+1, x-im) = x-im
+		return g;
 	Atoms atoms;
 	Expr x = expand(atoms.put(a)), y = expand(atoms.put(b));
 	onlyIm(a, "gcd");
@@ -356,6 +359,14 @@ Expr cancel(const Expr& e)
 	Frac f = reduce(normal(atoms.put(e)));
 	Expr r = f.d->kind == Kind::Num ? scale(f.n, f.d->num)
 	                                 : mul(f.n, simpPow(f.d, mkInt(-1)));
+	if (containsSym(e, kImag) && f.d->kind != Kind::Num) {
+		// common factors over Q(i): (x^2+1)/(x-im) = x+im
+		Expr n = expand(atoms.back(f.n)), d = expand(atoms.back(f.d)), g, qn, qd;
+		if (gaussianGcd(n, d, g) && g->kind != Kind::Num && gaussianQuotient(n, g, qn) &&
+		    gaussianQuotient(d, g, qd))
+			return qd->kind == Kind::Num ? expand(mul(qn, simpPow(qd, mkInt(-1))))
+			                              : mul(qn, simpPow(qd, mkInt(-1)));
+	}
 	return atoms.back(r);
 }
 

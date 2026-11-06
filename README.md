@@ -26,7 +26,8 @@ $ xyz -e 'table(x, x^2, x = 1 to 3)'
 ## Building
 
 You need a C++17 compiler, `make`, and a checkout of bc next to this
-repository (or anywhere else, given as `BC_DIR`):
+repository: `../bc` or `../ExternalRepos/bc` are found by themselves, or
+give it as `BC_DIR`:
 
 ```sh
 git clone https://github.com/gavinhoward/bc ../bc   # tested with 7.2.0 (1a8e2e65)
@@ -548,6 +549,23 @@ factor(x^2+2*sqrt(2)*x+2)   -> (x+2^(1/2))^2
   square of a rational number: `x^2+2*sqrt(2)*x+2` → `(x+2^(1/2))^2`,
   `x^2-2*sqrt(2)*x+1` → `(x-2^(1/2)-1)*(x-2^(1/2)+1)`. Other factoring
   over extensions is not done (`x^2-2` stays).
+* **Over the complex rationals** (numbers `a+b*im` with rational `a`, `b`):
+  `factor(e, im)` factors over them, and `factor` does so by itself when
+  `e` has `im` in it. This is for polynomials (and fractions of them) in
+  one symbol, and homogeneous ones in two symbols. It uses Trager's
+  method: `x` is shifted by `s*im` until the norm, `f(x)*conj(f)(x)`, has
+  rational coefficients and is square-free. The norm's factors over the
+  rationals then give the factors of `f` as gcds. The factors are monic,
+  with the number `a+b*im` in front.
+
+  ```
+  factor(x^2+1, im)           -> (x+im)*(x-im)
+  factor(x^4+1, im)           -> (x^2+im)*(x^2-im)
+  factor(x^4+4, im)           -> (x-1+im)*(x-1-im)*(x+1+im)*(x+1-im)
+  factor(x^2+2*im*x-1)        -> (x+im)^2
+  factor(x^3-im)              -> (x+im)*(x^2-im*x-1)
+  factor(x^2+y^2, im)         -> (x-im*y)*(x+im*y)
+  ```
 
 ### Solving equations
 
@@ -886,7 +904,7 @@ pipes straight into gnuplot, `sort` or a spreadsheet.
 | `trigreduce(e)`     | products and powers of sin/cos as sums of sin/cos           |
 | `sinh`, `cosh`, `tanh` | hyperbolic functions                                     |
 | `asinh`, `acosh`, `atanh` | inverse hyperbolic functions                          |
-| `factor(e)`         | primes of a number, factors of a polynomial or fraction     |
+| `factor(e[, im])`   | primes of a number, factors of a polynomial or fraction (`im`: over `a+b*im`) |
 | `solve(eq, x[, k])` | solutions of a polynomial equation (`k`: only solution `k`) |
 | `solve([eqs], [xs])` | a system of equations                                      |
 | `integrate(f, x[, a, b])` | antiderivative, or the integral from `a` to `b`       |
@@ -1036,8 +1054,12 @@ Things that are known to be missing or only partly done:
   of large numbers (factoring large numbers is hard).
 * **Splitting into real and imaginary parts** fails for roots of symbols
   and unknown functions: `Re(x^(1/2))` stays as it is.
-* **GCD over the complex numbers.** `gcd` and `cancel` treat `im` like an
-  extra symbol, so `gcd(x^2+1, x-im)` is `1`, although `x^2+1 = (x-im)(x+im)`.
+* **Complex coefficients.** `gcd`, `cancel` and `factor` work over the
+  complex rationals only for polynomials in one symbol (`gcd(x^2+1, x-im)`
+  is `x-im`). With several symbols `im` is treated like an extra symbol,
+  so common factors such as `x-im*y` are not found. Gaussian integers are
+  not factored into primes (`factor(5, im)` stays `5`, not
+  `(2+im)*(2-im)`).
 * **`==` with roots or unknown functions** can be false for equal
   expressions: `x^(1/2)*x^(1/2) == x` is false.
 * **Complex arguments of `asin`, `acos`, `atan`**, and `asin(2)` (which is
@@ -1074,7 +1096,8 @@ Things that are known to be missing or only partly done:
   ascending primes whose product is the number. `factor` of random
   products of polynomials is checked by value. `solve` is checked by
   putting every solution back into the polynomial (with `num`) and by
-  counting the solutions. Linear systems with a known solution are solved
+  counting the solutions. `factor(p, im)` of products with complex
+  coefficients is checked with `expand`, and for splitting completely. Linear systems with a known solution are solved
   and compared. `integrate` of random integrands is checked by
   differentiating the result, and `taylor` by comparing with the function
   close to the point.
@@ -1090,6 +1113,7 @@ Things that are known to be missing or only partly done:
 | `src/expr.*`               | immutable, shared expression trees               |
 | `src/simplify.cpp`         | simplification, expand, diff, polynomial helpers |
 | `src/gcd.cpp`              | gcd/lcm of numbers and polynomials, cancel       |
+| `src/gauss.cpp`            | gcd and factoring over the complex rationals     |
 | `src/complex.cpp`          | Re, Im, conj, abs                                |
 | `src/elem.cpp`             | elementary and hyperbolic functions, trigexpand, trigreduce |
 | `src/factor.cpp`           | factor(): primes, polynomial factorization       |

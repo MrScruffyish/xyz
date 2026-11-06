@@ -58,7 +58,7 @@ const Builtin builtins[] = {
 	{"log", 1, 2, -1, -1, false},
 	{"trigexpand", 1, 1, -1, -1, false},
 	{"trigreduce", 1, 1, -1, -1, false},
-	{"factor", 1, 1, -1, -1, false},
+	{"factor", 1, 2, -1, -1, false},
 	{"length", 1, 1, -1, -1, false},
 	{"integrate", 2, 4, 1, 0, false},
 	{"taylor", 2, 3, -1, -1, false},
@@ -869,13 +869,23 @@ Expr Interpreter::callBuiltin(const Expr& e, const Ctx& c)
 	static const std::pair<const char*, Expr (*)(const Expr&)> unary[] = {
 		{"expand", expand}, {"cancel", cancel}, {"Re", realPart}, {"Im", imagPart},
 		{"conj", conjugate}, {"abs", absValue}, {"trigexpand", trigexpand},
-		{"trigreduce", trigreduce}, {"factor", factor},
+		{"trigreduce", trigreduce},
 		{"sqrt", [](const Expr& x) { return simpPow(x, mkNum(Rational(1) / Rational(2))); }}};
 	for (const auto& [fname, f] : unary)
 		if (name == fname)
 			return mapList(resolve(e->args[0], c), f);
 	if (name == "solve")
 		return callSolve(e, c);
+	if (name == "factor") { // factor(e), factor(e, im): over Q(i)
+		bool gauss = false;
+		if (n == 2) {
+			if (!isImUnit(e->args[1]))
+				throw Error("factor: the second argument can only be " + imagName() +
+				            ", to factor over the complex rationals");
+			gauss = true;
+		}
+		return mapList(resolve(e->args[0], c), [gauss](const Expr& v) { return factor(v, gauss); });
+	}
 	if (name == "integrate") {
 		const std::string& x = varName(e, 1);
 		if (n == 3)

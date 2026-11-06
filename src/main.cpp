@@ -64,7 +64,7 @@ void usage(std::ostream& out)
 	       "  gcd(a, b, ...), lcm(a, b, ...), cancel(e), sqrt(e), Re(z), Im(z),\n"
 	       "  conj(z), abs(z) (im is the imaginary unit), sin, cos, tan, asin, acos,\n"
 	       "  atan, sinh, cosh, tanh, asinh, acosh, atanh, exp, ln, log(b, x), pi,\n"
-	       "  trigexpand(e), trigreduce(e), factor(e),\n"
+	       "  trigexpand(e), trigreduce(e), factor(e[, im]) (im: over a+b*im),\n"
 	       "  solve(eq[, x[, k]]) (eq: a = b, or e meaning e = 0), solve([eqs], [xs]),\n"
 	       "  integrate(f, x[, a, b]), taylor(f, x = a, n), limit(f, x = a[, left|right])\n"
 	       "  (inf for infinity), lists [a, b] and l[k], length(l), seq(e, i = a to b),\n"
