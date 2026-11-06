@@ -124,7 +124,7 @@ Expr absValue(const Expr& e);
 
 // --- assumptions (assume.cpp) ------------------------------------------
 // assume(x > 0), assume(n, integer): what is known about symbols
-enum class Sign { Unknown, Pos, NonNeg, Neg, NonPos, Zero };
+enum class Sign { Unknown, Pos, NonNeg, Neg, NonPos, Zero, NonZero };
 void setAssumption(const std::string& x, Sign s, bool integer);
 void forgetAssumption(const std::string& x);
 bool hasAssumptions(const std::string& x);
@@ -133,6 +133,9 @@ Sign signOf(const Expr& e);                 // the known sign of e
 bool nonNegative(const Expr& e);            // known to be >= 0
 bool positive(const Expr& e);               // known to be > 0
 bool isIntegerValued(const Expr& e);        // known to be an integer
+bool nonZero(const Expr& e);                // known to be != 0
+bool hasSignAssumption(const std::string& x);
+bool assumedInteger(const std::string& x);
 
 // --- elementary functions (elem.cpp) -----------------------------------
 // sin cos tan asin acos atan exp ln

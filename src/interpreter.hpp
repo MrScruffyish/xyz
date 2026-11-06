@@ -77,6 +77,8 @@ public:
 	int run(const std::string& text);
 	bool quit() const { return quit_; }
 	void setShowLines(bool b) { showLines_ = b; } // "error: line N: ..."
+	// typed at a terminal: a note (once) when an assumption would simplify
+	void setInteractive(bool b) { interactive_ = b; }
 
 private:
 	struct Def {
@@ -163,6 +165,9 @@ private:
 		std::vector<OutItem> items; // the same, as values
 	};
 	std::vector<LogEntry> log_;
+	bool interactive_ = false;
+	bool hinted_ = false;
+	Exprs shown_; // what the current statement printed
 	std::vector<OutItem>* items_ = nullptr; // recording for the current statement
 
 	// all results are printed through these

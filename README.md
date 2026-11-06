@@ -694,7 +694,7 @@ limit(sqrt(x^2+x)-x, x = inf)   -> 1/2
 own:
 
 ```
-assume(x > 0)         also >=, <, <=, and 0 < x
+assume(x > 0)         also >=, <, <=, != (and 0 < x)
 assume(n, integer)
 assumptions()         -> lists them: x > 0, n is an integer
 forget(x)             -> removes what is known about x
@@ -706,10 +706,27 @@ What follows from them:
   `(x^a)^b` → `x^(a*b)` for `x >= 0`.
 * `ln(a*b)` → `ln(a)+ln(b)` when every factor is known to be positive
   (`ln(2x)` → `ln(2)+ln(x)`), and `ln(x^r)` → `r*ln(x)` for `x > 0`.
+* `assume(x != 0)` lets formulas stored with `:=` cancel `x`:
+  `f := x/x` stores `1` (without it, `x/x` is kept there, because
+  cancelling would change where the formula is defined). `solve` then
+  leaves out `x = 0`.
 * For integers: `sin(n*pi)` → `0`, `cos(n*pi)` → `(-1)^n`,
   `sin(x + 2*n*pi)` → `sin(x)`, `(-1)^(2n)` → `1`.
 * `solve` keeps only the solutions that fit (real and with the right
   sign, integer).
+
+When typing at a terminal, xyz says once per session when a result could
+be simplified with an assumption, for example:
+
+```
+f := x/x
+note: x/x would be 1 with assume(x != 0) (this note is shown once)
+```
+
+It looks for `abs(x)`, `ln(x*y)`, `ln(x^r)`, `(x^a)^b`, `sin(n*pi)` and
+`cos(n*pi)`, and `x/x` kept in a formula, with symbols that have no
+assumption yet. The note goes to stderr, and is not shown when reading
+from a pipe or a file, or in `save` and `transcript` output.
 
 Signs of expressions are worked out from the assumptions: sums and
 products of positive terms are positive, even powers of real values are
@@ -878,7 +895,7 @@ pipes straight into gnuplot, `sort` or a spreadsheet.
 | `length(l)`         | number of elements of a list                                |
 | `seq(e, i = a to b)` | list of the values of `e`                                  |
 | `sum(e, i = a to b)`, `sum(l)` | sum of the values, or of a list                  |
-| `assume(x > 0)`, `assume(n, integer)` | what is known about a symbol (statement only) |
+| `assume(x > 0)`, `assume(n, integer)` | what is known about a symbol (`> >= < <= !=`; statement only) |
 | `forget(x)`, `assumptions()` | removes / lists assumptions (statement only)       |
 | `Re(z)`, `Im(z)`    | real and imaginary part (symbols are real)                  |
 | `conj(z)`           | complex conjugate                                           |

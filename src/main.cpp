@@ -122,6 +122,7 @@ int runInteractive(xyz::Interpreter& interp)
 	int errors = 0;
 	std::string chunk, line;
 	interp.setShowLines(false);
+	interp.setInteractive(true);
 	bool editing = false;
 #ifdef XYZ_READLINE
 	// readline echoes what is typed; send that to stderr (the terminal) so

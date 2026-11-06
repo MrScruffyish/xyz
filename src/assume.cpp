@@ -68,7 +68,8 @@ std::vector<std::string> listAssumptions()
 	std::vector<std::string> out;
 	for (const auto& [x, a] : g_assumed) {
 		const char* rel = a.sign == Sign::Pos ? " > 0" : a.sign == Sign::NonNeg ? " >= 0"
-		                : a.sign == Sign::Neg ? " < 0" : a.sign == Sign::NonPos ? " <= 0" : nullptr;
+		                : a.sign == Sign::Neg ? " < 0" : a.sign == Sign::NonPos ? " <= 0"
+		                : a.sign == Sign::NonZero ? " != 0" : nullptr;
 		if (rel)
 			out.push_back(x + rel);
 		if (a.integer)
@@ -88,7 +89,9 @@ Sign signOf(const Expr& e)
 		if (e->name == "pi")
 			return Sign::Pos;
 		auto it = g_assumed.find(e->name);
-		return it == g_assumed.end() ? Sign::Unknown : it->second.sign;
+		if (it == g_assumed.end() || it->second.sign == Sign::NonZero)
+			return Sign::Unknown; // nonzero: the sign is still unknown
+		return it->second.sign;
 	}
 	case Kind::Mul: {
 		S r{1, true, true};
@@ -160,6 +163,46 @@ bool nonNegative(const Expr& e)
 }
 
 bool positive(const Expr& e) { return signOf(e) == Sign::Pos; }
+
+bool hasSignAssumption(const std::string& x)
+{
+	auto it = g_assumed.find(x);
+	return it != g_assumed.end() && it->second.sign != Sign::Unknown;
+}
+
+bool assumedInteger(const std::string& x)
+{
+	auto it = g_assumed.find(x);
+	return it != g_assumed.end() && it->second.integer;
+}
+
+bool nonZero(const Expr& e)
+{
+	Sign s = signOf(e);
+	if (s == Sign::Pos || s == Sign::Neg)
+		return true;
+	switch (e->kind) {
+	case Kind::Num:
+		return !e->num.isZero();
+	case Kind::Sym: {
+		if (isImUnit(e))
+			return true;
+		auto it = g_assumed.find(e->name);
+		return it != g_assumed.end() && it->second.sign == Sign::NonZero;
+	}
+	case Kind::Mul:
+		for (const Expr& f : e->args)
+			if (!nonZero(f))
+				return false;
+		return true;
+	case Kind::Pow:
+		return nonZero(e->args[0]);
+	case Kind::Call:
+		return e->name == "exp" || e->name == "cosh";
+	default:
+		return false;
+	}
+}
 
 bool isIntegerValued(const Expr& e)
 {

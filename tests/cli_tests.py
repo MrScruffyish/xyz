@@ -214,6 +214,18 @@ def main():
               run(b, [], "1\nfoo(1)\n2\n"),
               ("1\n2\n", "error: line 2: unknown function 'foo'\n", 1))
 
+    # a note (once, only at a terminal) when an assumption would simplify
+    out = run_tty(b, "f := x/x\nsqrt(y^2)\nabs(z)\n")
+    check("assumption note once", out.count("note:"), 1)
+    check("assumption note text", "x/x would be 1 with assume(x != 0)" in out, True)
+    out = run_tty(b, "1+1\nsqrt(x^2)\n")
+    check("assumption note for abs", "abs(x) would be x with assume(x >= 0), or -x with "
+          "assume(x <= 0)" in out, True)
+    out = run_tty(b, "assume(x > 0)\nsqrt(x^2)\n")
+    check("no note when assumed", "note:" in out, False)
+    o, e, _ = run(b, [], "sqrt(x^2)\n")
+    check("no note in a pipe", "note:" in o + e, False)
+
     print(f"cli tests: {'ok' if not failures else f'{failures} FAILED'}")
     sys.exit(1 if failures else 0)
 

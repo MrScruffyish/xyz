@@ -104,9 +104,9 @@ y = assume(x > 0)
 ---
 abs(x)
 no assumptions
-error: line 5: assume: write assume(x > 0), assume(x >= 0), assume(x < 0), assume(x <= 0) or assume(n, integer)
-error: line 6: assume: write assume(x > 0), assume(x >= 0), assume(x < 0), assume(x <= 0) or assume(n, integer)
-error: line 7: assume: write assume(x > 0), assume(x >= 0), assume(x < 0), assume(x <= 0) or assume(n, integer)
+error: line 5: assume: write assume(x > 0), assume(x >= 0), assume(x < 0), assume(x <= 0), assume(x != 0) or assume(n, integer)
+error: line 6: assume: write assume(x > 0), assume(x >= 0), assume(x < 0), assume(x <= 0), assume(x != 0) or assume(n, integer)
+error: line 7: assume: write assume(x > 0), assume(x >= 0), assume(x < 0), assume(x <= 0), assume(x != 0) or assume(n, integer)
 error: line 8: assume() can only be used as a statement on its own
 
 === assumptions in integrals
@@ -166,3 +166,21 @@ tan(x)
 tan(x/2)
 2*tan(x)/3
 (-cos(2*x)+1)/(cos(2*x)+1)
+
+=== nonzero symbols
+f := x/x
+g := x^2/x + y/y
+assume(x != 0)
+h := x/x
+k := x^2/x + y/y
+f
+solve(x^2 - x)
+assumptions()
+---
+f := x/x
+g := x^2/x+y/y
+h := 1
+k := x+y/y
+1
+x = 1
+x != 0

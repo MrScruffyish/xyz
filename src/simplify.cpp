@@ -466,7 +466,7 @@ Expr simpMul(const Exprs& in)
 		}
 	};
 	for (auto& [b, exps] : bases) {
-		if (!g_safe || b->kind == Kind::Num) {
+		if (!g_safe || b->kind == Kind::Num || nonZero(b)) { // x/x = 1 for x != 0 (assumed)
 			emit(b, exps);
 			continue;
 		}

@@ -216,6 +216,92 @@ Expr definiteIntegral(const Expr& f, const std::string& x, const Expr& a, const 
 	return sub(fb, fa);
 }
 
+// A note about an assumption that would make e simpler, or "": the first
+// of abs(x), ln(x*y), ln(x^r), (x^a)^b, sin(n*pi), x/x (kept in a formula)
+// whose symbol has no assumption yet
+std::string assumptionHint(const Expr& e)
+{
+	auto freeSym = [](const Expr& u, std::string& name) {
+		std::function<bool(const Expr&)> walk = [&](const Expr& n) {
+			if (n->kind == Kind::Sym && !isImUnit(n) && n->name != "pi" && n->name != "inf" &&
+			    n->name[0] != '~' && !hasSignAssumption(n->name)) {
+				name = n->name;
+				return true;
+			}
+			for (const Expr& c : n->args)
+				if (walk(c))
+					return true;
+			return false;
+		};
+		return walk(u);
+	};
+	std::string x;
+	switch (e->kind) {
+	case Kind::Held:
+		return assumptionHint(e->args[0]);
+	case Kind::Call:
+		if (e->name == "abs" && e->args.size() == 1 && freeSym(e->args[0], x))
+			return toString(e) + " would be " + toString(e->args[0]) + " with assume(" + x +
+			       " >= 0), or " + toString(mul(mkInt(-1), e->args[0])) + " with assume(" + x +
+			       " <= 0)";
+		if (e->name == "ln" && e->args.size() == 1) {
+			const Expr& v = e->args[0];
+			if ((v->kind == Kind::Mul || (v->kind == Kind::Pow && v->args[0]->kind == Kind::Sym)) &&
+			    freeSym(v, x))
+				return "ln(" + toString(v) + ") would split into logarithms with assume(" + x +
+				       " > 0)";
+		}
+		if ((e->name == "sin" || e->name == "cos") && e->args.size() == 1 &&
+		    containsSym(e->args[0], "pi")) {
+			std::function<bool(const Expr&)> walk = [&](const Expr& n) {
+				if (n->kind == Kind::Sym && !isImUnit(n) && n->name != "pi" &&
+				    !assumedInteger(n->name)) {
+					x = n->name;
+					return true;
+				}
+				for (const Expr& c : n->args)
+					if (walk(c))
+						return true;
+				return false;
+			};
+			const Expr& u = e->args[0];
+			if (u->kind == Kind::Mul && walk(u))
+				return e->name + "(" + toString(u) + ") would simplify with assume(" + x +
+				       ", integer), if " + x + " is an integer";
+		}
+		break;
+	case Kind::Pow:
+		if (e->args[0]->kind == Kind::Pow && e->args[0]->args[0]->kind == Kind::Sym &&
+		    freeSym(e->args[0]->args[0], x))
+			return toString(e) + " would simplify with assume(" + x + " >= 0)";
+		break;
+	case Kind::Mul: { // x/x kept in a formula: a base with powers of both signs
+		std::vector<std::pair<Expr, int>> seen;
+		for (const Expr& f : e->args) {
+			Expr b = f;
+			int sg = 1;
+			if (f->kind == Kind::Pow && f->args[1]->kind == Kind::Num) {
+				b = f->args[0];
+				sg = f->args[1]->num.sign();
+			}
+			for (const auto& [b2, s2] : seen)
+				if (s2 != sg && equal(b, b2) && freeSym(b, x) && !nonZero(b))
+					return toString(b) + "/" + toString(b) + " would be 1 with assume(" + x + " != 0)";
+			seen.emplace_back(b, sg);
+		}
+		break;
+	}
+	default:
+		break;
+	}
+	for (const Expr& c : e->args) {
+		std::string h = assumptionHint(c);
+		if (!h.empty())
+			return h;
+	}
+	return "";
+}
+
 bool isOperator(const std::string& n)
 {
 	return n == "==" || n == "!=" || n == "<" || n == "<=" || n == ">" ||
@@ -667,6 +753,7 @@ Expr Interpreter::callSolve(const Expr& e, const Ctx& c)
 	Solutions s = solve(f, x);
 	if (hasAssumptions(x)) { // only the solutions that fit the assumptions
 		Sign want = signOf(mkSym(x));
+		bool wantNonZero = nonZero(mkSym(x));
 		bool wantInt = isIntegerValued(mkSym(x));
 		Exprs kept;
 		for (const Expr& r : s.roots) {
@@ -695,6 +782,8 @@ Expr Interpreter::callSolve(const Expr& e, const Ctx& c)
 				if (want == Sign::NonNeg) ok = ok && sg >= 0;
 				if (want == Sign::Neg) ok = ok && sg < 0;
 				if (want == Sign::NonPos) ok = ok && sg <= 0;
+				if (wantNonZero)
+					ok = ok && sg != 0;
 				if (wantInt)
 					ok = ok && r->kind == Kind::Num && r->num.isInt();
 			}
@@ -1282,7 +1371,8 @@ bool Interpreter::execStatementCall(const Stmt& s)
 		} else {
 			for (const Expr& a : e->args) {
 				const char* usage = "assume: write assume(x > 0), assume(x >= 0), "
-				                    "assume(x < 0), assume(x <= 0) or assume(n, integer)";
+				                    "assume(x < 0), assume(x <= 0), assume(x != 0) or "
+				                    "assume(n, integer)";
 				if (a->kind != Kind::Call || a->args.size() != 2)
 					throw Error(usage);
 				Expr l = a->args[0], r = a->args[1];
@@ -1295,7 +1385,7 @@ bool Interpreter::execStatementCall(const Stmt& s)
 				    l->name == "inf")
 					throw Error(usage);
 				Sign s = op == ">" ? Sign::Pos : op == ">=" ? Sign::NonNeg : op == "<" ? Sign::Neg
-				       : op == "<=" ? Sign::NonPos : Sign::Unknown;
+				       : op == "<=" ? Sign::NonPos : op == "!=" ? Sign::NonZero : Sign::Unknown;
 				if (s == Sign::Unknown)
 					throw Error(usage);
 				setAssumption(l->name, s, false);
@@ -1359,6 +1449,7 @@ void Interpreter::saveSession(const std::string& file, bool withOutput, bool sho
 
 void Interpreter::emitValue(const Expr& v)
 {
+	shown_.push_back(v);
 	out_ << toString(v) << '\n';
 	if (items_)
 		items_->push_back({OutItem::Type::Value, {v}, {}, {}, {}});
@@ -1373,6 +1464,7 @@ void Interpreter::emitLatex(const Expr& v)
 
 void Interpreter::emitDef(const std::string& name, const Def& d)
 {
+	shown_.push_back(d.body);
 	out_ << defString(name, d) << '\n';
 	if (items_)
 		items_->push_back({OutItem::Type::Def, {}, name, d, {}});
@@ -1380,6 +1472,7 @@ void Interpreter::emitDef(const std::string& name, const Def& d)
 
 void Interpreter::emitRow(const Exprs& v)
 {
+	shown_.insert(shown_.end(), v.begin(), v.end());
 	std::string line;
 	for (size_t i = 0; i < v.size(); i++)
 		line += (i ? "\t" : "") + toString(v[i]);
@@ -1582,6 +1675,7 @@ int Interpreter::run(const std::string& text)
 			outBuf_.sink = errBuf_.sink = &entry.output;
 			items_ = &entry.items;
 		}
+		shown_.clear();
 		try {
 			if (s->type == Stmt::Type::Else) {
 				// continues the if executed just before (typed on a later line)
@@ -1612,6 +1706,17 @@ int Interpreter::run(const std::string& text)
 		err_.flush();
 		outBuf_.sink = errBuf_.sink = nullptr;
 		items_ = nullptr;
+		if (interactive_ && !hinted_) { // once: what an assumption would do
+			for (const Expr& v : shown_) {
+				std::string h = assumptionHint(v);
+				if (!h.empty()) {
+					err_ << "note: " << h << " (this note is shown once)\n";
+					err_.flush();
+					hinted_ = true;
+					break;
+				}
+			}
+		}
 		if (record)
 			log_.push_back(std::move(entry));
 		if (s->type != Stmt::Type::Empty)
