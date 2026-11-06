@@ -12,7 +12,8 @@
      gcd(A*C, B*C) divides both and is a multiple of C; cancel keeps values
   7. complex arithmetic and Re/Im/conj vs exact complex fractions
      num() vs Python's decimal module; diff vs central differences;
-     trigexpand keeps the value
+     trigexpand and trigreduce keep the value
+     factor: primes / same value; solve: the solutions make p zero
   8. '=' snapshots and ':=' formulas vs a Python model
 
 usage: random_tests.py [binary] [--count N] [--seed S]
@@ -633,6 +634,151 @@ def test_trigexpand(binary, rng, count):
             fail("trigexpand", f"{line} -> {g}")
 
 
+def test_trigreduce(binary, rng, count):
+    """trigreduce keeps the value of products and powers of sin, cos, tan."""
+    lines = []
+    for _ in range(count):
+        factors = []
+        for _ in range(rng.randint(1, 4)):
+            f = rng.choice(["sin", "cos", "sin", "cos", "tan"])
+            arg = rng.choice(["y", "z", "2*y", "y+z", "y-3*z"])
+            factors.append(f"{f}({arg})^{rng.randint(1, 5)}")
+        e = "*".join(factors)
+        if rng.random() < 0.3:
+            e = f"({e} + {rng.choice(['sin', 'cos', 'tan'])}(y))^2"
+        elif rng.random() < 0.3:
+            e = f"trigexpand({e})"
+        u = f"{rng.randint(1, 9)}/{rng.randint(2, 9)}"
+        v = f"{rng.randint(1, 9)}/{rng.randint(2, 9)}"
+        lines.append(f"num(subs(trigreduce({e}) - ({e}), y={u}, z={v}), 30)")
+        lines.append(f"num(subs({e}, y={u}, z={v}), 30)")
+    out = xyz(binary, lines)
+    for i in range(0, len(lines), 2):
+        g, size = out[i], out[i + 1]
+        try:  # relative to the size of the value (tan can be large)
+            ok = abs(D(g)) <= D(10) ** -28 * max(D(1), abs(D(size)))
+        except decimal.InvalidOperation:
+            ok = False
+        if not ok:
+            fail("trigreduce", f"{lines[i]} -> {g}")
+
+
+# ---------------------------------------------- factor and solve
+
+def is_prime(n):
+    if n < 2:
+        return False
+    for p in [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37]:
+        if n % p == 0:
+            return n == p
+    d, s = n - 1, 0
+    while d % 2 == 0:
+        d, s = d // 2, s + 1
+    for a in [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37]:
+        x = pow(a, d, n)
+        if x in (1, n - 1):
+            continue
+        for _ in range(s - 1):
+            x = x * x % n
+            if x == n - 1:
+                break
+        else:
+            return False
+    return True
+
+
+def test_factor_int(binary, rng, count):
+    """factor(n): the factors are primes, ascending, and multiply to n."""
+    nums = []
+    for _ in range(count):
+        n = 1
+        for _ in range(rng.randint(1, 6)):
+            n *= rng.choice([rng.randint(2, 50), rng.randint(2, 10**6), rng.randint(2, 10**9)])
+        nums.append(n * rng.choice([1, 1, -1]))
+    for n, g in zip(nums, xyz(binary, [f"factor({n})" for n in nums])):
+        sign, body = (-1, g[1:]) if g.startswith("-") else (1, g)
+        prod, last, ok = 1, 0, True
+        for f in body.split("*"):
+            p, _, k = f.partition("^")
+            p, k = int(p), int(k or 1)
+            ok = ok and is_prime(p) and p > last
+            prod, last = prod * p ** k, p
+        if not ok or sign * prod != n:
+            fail("factor (integer)", f"factor({n}) -> {g}")
+
+
+def gen_factor(rng):
+    """a random factor in x and y: linear, or of degree 2..4 in x"""
+    r = rng.random()
+    if r < 0.5:
+        return f"({rng.randint(1, 4)}*x+({rng.randint(-6, 6)}))"
+    if r < 0.6:
+        return f"(x+({rng.randint(-3, 3)})*y)"
+    d = rng.randint(2, 4)
+    return "(" + "+".join(f"({rng.randint(-4, 4)})*x^{i}" for i in range(d)) + f"+x^{d})"
+
+
+def test_factor_poly(binary, rng, count):
+    """factor(p) (as printed) has the value of p, and finds the linear factors."""
+    polys = ["*".join(gen_factor(rng) for _ in range(rng.randint(1, 4))) for _ in range(count)]
+    got = xyz(binary, [f"factor(expand({p}))" for p in polys])
+    for p, g in zip(polys, got):
+        if g.startswith("error"):
+            fail("factor (polynomial)", f"{p} -> {g}")
+            continue
+        for _ in range(3):
+            pt = rand_point(rng)
+            if py_eval(p, pt) != py_eval(g, pt):
+                fail("factor (polynomial)", f"{p} -> {g} differs at {pt}")
+                break
+
+
+def decimal_complex(g):
+    """num() output a, b*im or a+b*im as a complex number of Decimals"""
+    t = g.replace("*im", "")
+    i = max(t.rfind("+"), t.rfind("-"))
+    if "im" not in g:
+        return complex(D(t))
+    if i <= 0:
+        return complex(0, D(t))
+    return complex(D(t[:i]), D(t[i:]))
+
+
+def test_solve(binary, rng, count):
+    """every solution of solve(p, x) makes p zero, and a square-free p of
+    degree n with factors of degree <= 4 has n solutions."""
+    lines, cases = [], []
+    for _ in range(count):
+        while True:
+            fs = [gen_factor(rng).replace("y", "1") for _ in range(rng.randint(1, 3))]
+            p = "*".join(fs)
+            deg = sum(f.count("^") and max(int(t) for t in re.findall(r"x\^(\d+)", f)) or 1
+                      for f in fs)
+            if deg <= 6:
+                break
+        cases.append((p, deg))
+        for k in range(1, deg + 2):
+            lines.append(f"num(subs({p}, x=solve(expand({p}), x, {k})), 25)")
+    out = iter(xyz(binary, lines))
+    for p, deg in cases:
+        for k in range(1, deg + 2):
+            g = next(out)
+            if g.startswith("error"):
+                # fewer solutions only for repeated roots, or p = 0 identically
+                if "only" not in g and "every" not in g:
+                    fail("solve", f"{p}, solution {k}: {g}")
+                continue
+            if k > deg:
+                fail("solve", f"{p}: more than {deg} solutions")
+                continue
+            try:
+                ok = abs(decimal_complex(g)) < D(10) ** -15
+            except decimal.InvalidOperation:
+                ok = False
+            if not ok:
+                fail("solve", f"{p}, solution {k}: p(x) = {g}")
+
+
 # ---------------------------------------------- variables: '=' and ':='
 
 def test_links(binary, rng, count):
@@ -732,7 +878,8 @@ def main():
     tests = [test_numbers, test_division_by_zero, test_vs_bc, test_expand,
              test_eval, test_diff, test_division, test_gcd, test_cancel,
              test_complex, test_complex_symbols, test_num, test_diff_numeric,
-             test_trigexpand, test_links]
+             test_trigexpand, test_trigreduce, test_factor_int,
+             test_factor_poly, test_solve, test_links]
     for t in tests:
         before = failures
         t(a.binary, rng, a.count)

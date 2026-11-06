@@ -411,20 +411,130 @@ they are (`sin(1)`, `ln(x)`), and `num` gives decimals.
   `tan(atan(x))` → `x`. (`asin(sin(x))` is only `x` for some `x`, so it
   stays.)
 * **sin² + cos²:** `c*sin(u)^2 + c*cos(u)^2` → `c` in sums, also with other
-  factors: `3*sin(x)^2 + 3*cos(x)^2 + 1` → `4`. More general trigonometric
-  simplification is not done.
+  factors: `3*sin(x)^2 + 3*cos(x)^2 + 1` → `4`. More is done only on
+  request, with `trigexpand` and `trigreduce`.
 * **Derivatives:** `diff` knows all of them, with the chain rule, and
   powers with the variable in the exponent: `diff(2^x, x)` → `2^x*ln(2)`,
   `diff(x^x, x)` → `x^x*(ln(x)+1)`.
 * **`trigexpand(e)`** applies the addition formulas and writes
-  `sin(n*x)`, `cos(n*x)` (integer `n`) in `sin(x)` and `cos(x)`:
+  `sin(n*x)`, `cos(n*x)` (integer `n`) in `sin(x)` and `cos(x)`, and
+  `tan(x+y)`, `tan(n*x)` in `tan(x)` and `tan(y)`:
 
   ```
   trigexpand(sin(2x))      -> 2*cos(x)*sin(x)
   trigexpand(cos(x+y))     -> cos(x)*cos(y)-sin(x)*sin(y)
   trigexpand(cos(3x))      -> cos(x)^3-3*cos(x)*sin(x)^2
-  trigexpand(tan(x+y))     -> (cos(x)*sin(y)+cos(y)*sin(x))/(cos(x)*cos(y)-sin(x)*sin(y))
+  trigexpand(tan(x+y))     -> (tan(x)+tan(y))/(-tan(x)*tan(y)+1)
+  trigexpand(tan(2x))      -> 2*tan(x)/(-tan(x)^2+1)
+  trigexpand(tan(x+pi/2))  -> -1/tan(x)
   ```
+* **`trigreduce(e)`** goes the other way: products and powers of `sin` and
+  `cos` become sums of `sin` and `cos` of combined angles (product-to-sum
+  formulas, and the binomial theorem for powers). That also undoes
+  `trigexpand`. With `tan`, or `sin`/`cos` in a denominator, `tan` is
+  written as `sin/cos`, the expression is made one fraction, numerator and
+  denominator are reduced on their own, and `sin(v)/cos(v)` becomes
+  `tan(v)`. For a sum, this is also done term by term, and the shorter
+  result is kept. Powers above 1000 are refused.
+
+  ```
+  trigreduce(2*sin(x)*cos(x))           -> sin(2*x)
+  trigreduce(cos(x)^2-sin(x)^2)         -> cos(2*x)
+  trigreduce(cos(x)*cos(y)-sin(x)*sin(y)) -> cos(x+y)
+  trigreduce(sin(x)^3)                  -> 3*sin(x)/4-sin(3*x)/4
+  trigreduce(trigexpand(cos(3x)))       -> cos(3*x)
+  trigreduce(2*tan(x)/(1-tan(x)^2))     -> tan(2*x)
+  trigreduce(tan(x)^2+1)                -> 2/(cos(2*x)+1)
+  ```
+
+### Factoring
+
+`factor(e)` writes a number as a product of primes, and a polynomial (or a
+fraction of polynomials) as a product of factors with rational
+coefficients. The result is shown factored, but it computes like the
+value it stands for: `f = factor(120)` shows `2^3*3*5`, and `f + 1` is
+`121`.
+
+```
+factor(120)                 -> 2^3*3*5
+factor(-12/35)              -> -2^2*3/(5*7)
+factor(2^64+1)              -> 274177*67280421310721
+factor(12x^2-12)            -> 12*(x-1)*(x+1)
+factor(x^4+4)               -> (x^2-2*x+2)*(x^2+2*x+2)
+factor(x^6-1)               -> (x-1)*(x+1)*(x^2+x+1)*(x^2-x+1)
+factor((x^2-1)/(x^2+2x+1))  -> (x-1)/(x+1)
+factor(x^3+y^3)             -> (x+y)*(x^2-x*y+y^2)
+factor(sin(x)^2-1)          -> (sin(x)-1)*(sin(x)+1)
+```
+
+* **Numbers** are divided by the primes up to 10^5. What is left is
+  tested with Miller-Rabin and split with Pollard's rho method (Brent's
+  variant). Every number below 2^63 is factored completely, and in
+  practice any number whose prime factors, except the largest, are below
+  about 10^11. Otherwise rho gives up after a fixed number of steps
+  (a few seconds) with an error. Numbers with more than 300 digits are
+  refused. Below 3.3·10^24 the primality test is exact. Above that, a
+  large factor is a probable prime (12 Miller-Rabin bases).
+* **Polynomials in one variable** are split into square-free parts
+  (Yun's algorithm), then rational roots are found (`p/q` with `p`
+  dividing the constant term and `q` the leading coefficient). The rest is
+  searched for factors of degree 2 and more by Kronecker's method, which
+  gives up when there are more than 20000 candidates. So small polynomials
+  are factored completely, and large ones may keep a factor that could be
+  split further.
+* **Several variables:** numbers and common factors are taken out for
+  each variable (`a*x+a*b` → `a*(b+x)`, `x^2*y-y+x^2-1` →
+  `(x-1)*(x+1)*(y+1)`), then the square-free parts. Homogeneous
+  polynomials in two variables are factored like polynomials in one
+  (`x^2-y^2` → `(x+y)*(x-y)`). Other factors in several variables are
+  kept as they are.
+* Factors are written with integer coefficients and a positive leading
+  coefficient. The number in front takes the rest. Calls and roots are
+  treated like variables (`sin(x)` above). Factoring over extensions is not
+  done: `x^2+2*sqrt(2)*x+2` stays, though it is `(x+sqrt(2))^2`.
+
+### Solving equations
+
+`solve(eq, x)` solves the equation `eq` for `x`. `eq` is `a = b`, or an
+expression meaning `expr = 0`. `x` can be left out when the equation has
+only one symbol. The solutions are listed, each one once, rational ones
+first and ascending. `solve(eq, x, k)` gives solution number `k` as a
+value to compute with.
+
+```
+solve(x^2 = 4)              -> x = -2, x = 2
+solve(x^2+x+1)              -> x = -1/2+3^(1/2)*im/2, x = -1/2-3^(1/2)*im/2
+solve(a*x^2+b*x+c, x)       -> x = (-b+(-4*a*c+b^2)^(1/2))/(2*a), x = (-b-(-4*a*c+b^2)^(1/2))/(2*a)
+solve(x^3-6x^2+11x-6)       -> x = 1, x = 2, x = 3
+solve(x^3-2)                -> x = 2^(1/3), x = 2^(1/3)*(-1/2+3^(1/2)*im/2), ...
+solve(x^3-3x+1)             -> x = 2*cos(2*pi/9), x = 2*cos(4*pi/9), x = 2*cos(10*pi/9)
+solve(x^4-10x^2-8x+5)       -> x = 6^(1/2)+1, x = -6^(1/2)+1, x = 2^(1/2)-1, x = -2^(1/2)-1
+solve(x^7-x)                -> x = -1, x = 0, x = 1, ... (and the four complex ones)
+solve(x^5-x-1)              -> x^5-x-1 = 0          (not solved)
+solve((x^2-1)/(x-1))        -> x = -1               (x = 1 makes the denominator 0)
+r = solve(x^3-2, x, 1)      -> r = 2^(1/3)
+```
+
+* Only polynomial equations are solved (also fractions of polynomials:
+  the numerator is solved, and roots of the denominator are left out).
+  Equations with `sin(x)`, `exp(x)`, `x^(1/2)`, ... in `x` give an error.
+* The polynomial is factored first (see `factor`), and each factor is
+  solved by formula:
+  - degree 1 and 2, also with symbols as coefficients;
+  - degree 3 by Cardano's formula. With three real roots the
+    trigonometric form is used, which avoids cube roots of complex
+    numbers;
+  - degree 4 by Ferrari's method. When its resolvent cubic has a rational
+    root the result is short. Otherwise it is long, but exact.
+  Degree 3 and 4 need numbers as coefficients.
+* Factors that are not solved are kept in the list as `factor = 0`. These
+  are factors of degree 5 and more that do not split further, and factors
+  of degree 3 and 4 with symbols. `num()` of a solution gives decimals.
+* Factors without `x` (like `a` in `a*x+a*b`) are taken to be nonzero.
+  `solve(a*x+b, x)` gives `-b/a` without asking whether `a = 0`.
+* The list itself cannot be used in calculations; use
+  `solve(eq, x, k)`. `solve(1/x)` gives `no solution`, `solve(x-x)` gives
+  `every value is a solution`.
 
 ### Comparisons and logic
 
@@ -574,6 +684,9 @@ pipes straight into gnuplot, `sort` or a spreadsheet.
 | `exp(e)`, `ln(e)`   | exponential function and natural logarithm                  |
 | `log(b, x)`         | logarithm to base `b`; `log(x)` is `ln(x)`                  |
 | `trigexpand(e)`     | addition and multiple-angle formulas                        |
+| `trigreduce(e)`     | products and powers of sin/cos as sums of sin/cos           |
+| `factor(e)`         | primes of a number, factors of a polynomial or fraction     |
+| `solve(eq, x[, k])` | solutions of a polynomial equation (`k`: only solution `k`) |
 | `Re(z)`, `Im(z)`    | real and imaginary part (symbols are real)                  |
 | `conj(z)`           | complex conjugate                                           |
 | `abs(z)`            | absolute value                                              |
@@ -678,6 +791,13 @@ never broken into several lines, whatever their length (bc breaks lines at
 
 Things that are known to be missing or only partly done:
 
+* **Factoring and solving** are kept simple. Factoring is over the
+  rationals only, and fully only in one variable. Kronecker's method gives
+  up on large polynomials, and Pollard's rho on numbers with two large
+  prime factors (see `factor`). `solve` only handles polynomial equations,
+  solves degree 5 and more only through factors, and gives the general
+  quartic as a long exact formula.
+
 * **Domains and assumptions.** There is no way to say that `x > 0` or that
   `x` is an integer or complex. All symbols are taken to be real, and
   simplifications that need more (`sqrt(x^2)` → `x` for `x >= 0`,
@@ -710,8 +830,10 @@ Things that are known to be missing or only partly done:
   `-pi/2 <= x <= pi/2`, so it is not simplified. That needs domains.
 * **Logarithm rules** `ln(a*b)` → `ln(a)+ln(b)` and `ln(x^n)` → `n*ln(x)`
   are only true for positive values, so they are not done (needs domains).
-* **Trigonometric simplification** beyond `sin^2+cos^2 = 1` (e.g. writing
-  a result back with double angles) is not done.
+* **Automatic trigonometric simplification** beyond `sin^2+cos^2 = 1` is
+  not done: `trigexpand` and `trigreduce` must be asked for, and nothing
+  picks the shortest form by itself. Half-angle forms are not recognised:
+  `trigreduce(sin(2x)/(1+cos(2x)))` stays, though it is `tan(x)`.
 * **`num` has no proven error bounds.** The guard digits make a wrong
   last digit very unlikely, but not impossible. Numbers with more than
   100000 digits are refused.
@@ -731,7 +853,12 @@ Things that are known to be missing or only partly done:
   symbols. `num()` of random expressions with roots, `pi`, `exp`, `ln`,
   `sin`, `cos` and `atan` is checked against Python's `decimal` module (with
   its own series for the trigonometric functions), `diff` of random
-  functions against central differences, and `trigexpand` by value.
+  functions against central differences, and `trigexpand` and
+  `trigreduce` by value. `factor` of random integers is checked to give
+  ascending primes whose product is the number. `factor` of random
+  products of polynomials is checked by value. `solve` is checked by
+  putting every solution back into the polynomial (with `num`) and by
+  counting the solutions.
   `=` and `:=` are checked against a Python model of both semantics. A
   failure prints its seed (`--seed N`) so it can be reproduced.
 
@@ -745,7 +872,9 @@ Things that are known to be missing or only partly done:
 | `src/simplify.cpp`         | simplification, expand, diff, polynomial helpers |
 | `src/gcd.cpp`              | gcd/lcm of numbers and polynomials, cancel       |
 | `src/complex.cpp`          | Re, Im, conj, abs                                |
-| `src/elem.cpp`             | sin, cos, tan, asin, acos, atan, exp, ln, log, trigexpand |
+| `src/elem.cpp`             | sin, cos, tan, asin, acos, atan, exp, ln, log, trigexpand, trigreduce |
+| `src/factor.cpp`           | factor(): primes, polynomial factorization       |
+| `src/solve.cpp`            | solve(): polynomial equations up to degree 4     |
 | `src/numeric.cpp`          | decimal values for num()                         |
 | `src/print.cpp`            | expression → text                                |
 | `src/parser.*`             | lexer and recursive-descent parser               |

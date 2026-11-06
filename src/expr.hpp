@@ -25,6 +25,9 @@ enum class Kind {
 	      // name = args[0] to args[1] step args[2]  (table argument)
 	Dec,  // decimal text produced by num(); cannot be computed with
 	Str,  // "text": only as a file name for save() and transcript()
+	Held, // a result shown in a special form: args[0] is what is shown,
+	      // args[1] (if present) the value used in calculations, else
+	      // name says why it cannot be used: factor(12) shows 2^2*3
 };
 
 struct Node;
@@ -50,6 +53,12 @@ Expr mkCall(std::string name, Exprs args);
 Expr mkArg(std::string name, Expr value);
 Expr mkRange(std::string name, Expr start, Expr stop, Expr step);
 inline bool isRange(const Expr& e) { return e->kind == Kind::Arg && e->args.size() == 3; }
+Expr mkHeld(Expr shown, Expr value);                  // shown as 'shown', computes as 'value'
+Expr mkHeldOnly(Expr shown, std::string whyNoValue); // shown only
+// the value of a Held node (an Error if it has none); other nodes as they are
+Expr heldValue(const Expr& e);
+// e with the symbol x replaced by v, simplified
+Expr substitute(const Expr& e, const std::string& x, const Expr& v);
 
 // raw (unsimplified) builders, used by the parser
 Expr rawAdd(Expr a, Expr b);
@@ -117,6 +126,33 @@ bool isElementary(const std::string& name);
 Expr makeFunction(const std::string& name, const Exprs& args);
 Expr derivativeOf(const std::string& name, const Expr& u); // f'(u)
 Expr trigexpand(const Expr& e); // addition and multiple-angle formulas
+Expr trigreduce(const Expr& e); // products and powers of sin/cos as sums
+
+// --- factorization (factor.cpp) ----------------------------------------
+// factor(): numbers into primes (2^3*3*5), polynomials and fractions of
+// polynomials into factors over the rationals. The result is a Held node
+// (or e itself when nothing factors).
+Expr factor(const Expr& e);
+struct Factored {
+	Rational content;                         // a number
+	std::vector<std::pair<Expr, long>> parts; // factor, multiplicity
+};
+// a polynomial (in any symbols) as content * product of factor^multiplicity;
+// the factors have integer coefficients and a positive leading coefficient
+Factored factorPolynomial(const Expr& p);
+// the rational roots of c[0] + c[1]*x + ... + c[n]*x^n, each once, ascending
+std::vector<Rational> rationalRoots(const std::vector<Rational>& c);
+
+// --- equations (solve.cpp) ---------------------------------------------
+// The solutions of e = 0 for x. Factors of degree 5 and more (and
+// non-numeric ones of degree 3 and 4) that cannot be solved are returned
+// in 'unsolved'. 'all' is set when every x is a solution.
+struct Solutions {
+	Exprs roots;
+	Exprs unsolved;
+	bool all = false;
+};
+Solutions solve(const Expr& e, const std::string& x);
 
 // --- decimals (numeric.cpp) ------------------------------------------
 // num(): numbers (also sqrt(2), pi, sin(1), ...) as decimals with the given
@@ -138,6 +174,8 @@ Expr polyLcm(const Expr& a, const Expr& b);
 // cancelled. Non-polynomial parts (roots, symbolic powers) are kept as
 // they are and treated like symbols.
 Expr cancel(const Expr& e);
+// cancel(e) as numerator and denominator, both expanded
+std::pair<Expr, Expr> cancelParts(const Expr& e);
 // Is e identically zero (after bringing it to one fraction)?
 bool isIdenticallyZero(const Expr& e);
 

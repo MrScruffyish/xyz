@@ -359,6 +359,15 @@ Expr cancel(const Expr& e)
 	return atoms.back(r);
 }
 
+std::pair<Expr, Expr> cancelParts(const Expr& e)
+{
+	if (e->kind == Kind::Dec)
+		throw Error("a num() result cannot be used in further calculations");
+	Atoms atoms;
+	Frac f = reduce(normal(atoms.put(e)));
+	return {expand(atoms.back(f.n)), expand(atoms.back(f.d))};
+}
+
 bool isIdenticallyZero(const Expr& e)
 {
 	if (isZero(expand(e)))

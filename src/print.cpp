@@ -49,6 +49,10 @@ int prec(const Expr& n)
 	case Kind::Str:
 		return P_ATOM;
 	case Kind::Call:
+		if (n->name == "=" || n->name == "%sols")
+			return P_ARG;
+		if (n->name == "%fac")
+			return !n->args.empty() && isNumber(n->args[0], -1) ? P_NEG : P_MUL;
 		return opPrec(n->name) >= 0 ? opPrec(n->name) : P_ATOM;
 	case Kind::Add:
 		return P_ADD;
@@ -61,11 +65,29 @@ int prec(const Expr& n)
 		return negNumExp(n) ? P_MUL : P_POW;
 	case Kind::Arg:
 		return P_ARG;
+	case Kind::Held:
+		return prec(n->args[0]);
 	}
 	return P_ATOM;
 }
 
 void pr(std::string& out, const Expr& n, int minPrec);
+
+// the factors of a %fac node: numerator and denominator (p or p^k), and
+// the sign written to out
+void splitFac(const Expr& n, Exprs& num, Exprs& den, std::string& out)
+{
+	for (const Expr& f : n->args) {
+		if (isNumber(f, -1)) {
+			out += '-';
+		} else if (f->kind == Kind::Pow && f->args[1]->num.sign() < 0) {
+			Rational k = -f->args[1]->num;
+			den.push_back(k.isOne() ? f->args[0] : mkPow(f->args[0], mkNum(k)));
+		} else {
+			num.push_back(f);
+		}
+	}
+}
 
 void flattenMul(const Expr& n, Exprs& out)
 {
@@ -182,6 +204,49 @@ void pr(std::string& out, const Expr& n, int minPrec)
 		}
 		break;
 	case Kind::Call:
+		if (n->name == "=") { // an equation in solve()
+			pr(out, n->args[0], P_OR);
+			out += " = ";
+			pr(out, n->args[1], P_OR);
+			break;
+		}
+		if (n->name == "%sols") { // solve(): x = 1, x = 2
+			for (size_t i = 0; i < n->args.size(); i++) {
+				if (i)
+					out += ", ";
+				const Expr& a = n->args[i];
+				if (a->kind == Kind::Arg) {
+					out += a->name + " = ";
+					pr(out, a->args[0], P_OR);
+				} else {
+					pr(out, a, P_ARG);
+				}
+			}
+			break;
+		}
+		if (n->name == "%fac") { // factor() of a number: -2^3*3/(5*7)
+			Exprs num, den;
+			splitFac(n, num, den, out);
+			auto join = [&](const Exprs& v) {
+				for (size_t i = 0; i < v.size(); i++) {
+					if (i)
+						out += '*';
+					pr(out, v[i], P_POW);
+				}
+			};
+			if (num.empty())
+				out += '1';
+			join(num);
+			if (!den.empty()) {
+				out += '/';
+				if (den.size() > 1)
+					out += '(';
+				join(den);
+				if (den.size() > 1)
+					out += ')';
+			}
+			break;
+		}
 		if (int op = opPrec(n->name); op >= 0) {
 			if (n->name == "!") {
 				out += '!';
@@ -215,6 +280,9 @@ void pr(std::string& out, const Expr& n, int minPrec)
 				pr(out, n->args[2], P_ADD);
 			}
 		}
+		break;
+	case Kind::Held: // the parentheses are already written
+		pr(out, n->args[0], P_ARG);
 		break;
 	}
 	if (paren)
@@ -396,6 +464,43 @@ void lx(std::string& out, const Expr& n, int minPrec)
 	}
 	case Kind::Call: {
 		const std::string& f = n->name;
+		if (f == "=") {
+			lx(out, n->args[0], P_OR);
+			out += " = ";
+			lx(out, n->args[1], P_OR);
+			break;
+		}
+		if (f == "%sols") {
+			for (size_t i = 0; i < n->args.size(); i++) {
+				if (i)
+					out += ",\\quad ";
+				lx(out, n->args[i], P_ARG);
+			}
+			break;
+		}
+		if (f == "%fac") {
+			Exprs num, den;
+			splitFac(n, num, den, out);
+			auto join = [&](const Exprs& v) {
+				if (v.empty())
+					out += '1';
+				for (size_t i = 0; i < v.size(); i++) {
+					if (i)
+						out += " \\cdot ";
+					lx(out, v[i], P_POW);
+				}
+			};
+			if (den.empty()) {
+				join(num);
+			} else {
+				out += "\\frac{";
+				join(num);
+				out += "}{";
+				join(den);
+				out += '}';
+			}
+			break;
+		}
 		if (int op = opPrec(f); op >= 0) {
 			if (f == "!") {
 				out += "\\lnot ";
@@ -454,6 +559,9 @@ void lx(std::string& out, const Expr& n, int minPrec)
 			out += " \\ldots ";
 			lx(out, n->args[1], P_ADD);
 		}
+		break;
+	case Kind::Held:
+		lx(out, n->args[0], P_ARG);
 		break;
 	}
 	if (paren)

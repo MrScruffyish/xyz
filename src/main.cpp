@@ -63,7 +63,8 @@ void usage(std::ostream& out)
 	       "  diff(e, x[, n]), deg(e, x), coeff(e, x, n), quo(p, q, x), rem(p, q, x),\n"
 	       "  gcd(a, b, ...), lcm(a, b, ...), cancel(e), sqrt(e), Re(z), Im(z),\n"
 	       "  conj(z), abs(z) (im is the imaginary unit), sin, cos, tan, asin, acos,\n"
-	       "  atan, exp, ln, log(b, x), trigexpand(e), pi\n"
+	       "  atan, exp, ln, log(b, x), trigexpand(e), trigreduce(e), pi,\n"
+	       "  factor(e), solve(eq[, x[, k]]) (eq: a = b, or e meaning e = 0)\n"
 	       "Statements: disp(e, ...), def(a), unset(a, ...),\n"
 	       "  table(e, ..., x = 1 to 10 [step s], ...), latex(e), save(\"file\"),\n"
 	       "  transcript(\"file\") (LaTeX if the name ends in .tex), quit\n";

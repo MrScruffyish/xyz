@@ -100,8 +100,61 @@ cos(x)^2-sin(x)^2
 cos(x)*sin(y)+cos(y)*sin(x)
 cos(x)*cos(y)+sin(x)*sin(y)
 cos(x)^3-3*cos(x)*sin(x)^2
-(cos(x)*sin(y)+cos(y)*sin(x))/(cos(x)*cos(y)-sin(x)*sin(y))
+(tan(x)+tan(y))/(-tan(x)*tan(y)+1)
 2*cos(x)*sin(x)+ln(x)
+
+=== trigreduce
+trigreduce(2*sin(x)*cos(x))
+trigreduce(cos(x)^2-sin(x)^2)
+trigreduce(cos(x)^2)
+trigreduce(sin(x)^3)
+trigreduce(cos(x)^4)
+trigreduce(cos(x)*cos(y)-sin(x)*sin(y))
+trigreduce(sin(x)*cos(y))
+trigreduce(sin(x)*sin(2x)*sin(3x))
+trigreduce((sin(x)+cos(x))^2)
+trigreduce(x*sin(x)*cos(x)+1)
+---
+sin(2*x)
+cos(2*x)
+cos(2*x)/2+1/2
+3*sin(x)/4-sin(3*x)/4
+cos(2*x)/2+cos(4*x)/8+3/8
+cos(x+y)
+sin(x+y)/2+sin(x-y)/2
+sin(2*x)/4+sin(4*x)/4-sin(6*x)/4
+sin(2*x)+1
+x*sin(2*x)/2+1
+
+=== trigreduce undoes trigexpand
+disp(trigreduce(trigexpand(cos(3x))), trigreduce(trigexpand(sin(5x))), trigreduce(trigexpand(cos(x-y))))
+---
+cos(3*x)	sin(5*x)	cos(x-y)
+
+=== trigreduce leaves the rest
+disp(trigreduce((x+1)^2), trigreduce(exp(sin(x)*cos(x))), trigreduce(tan(x)+1))
+trigreduce(sin(x)^2/cos(x))
+trigreduce(sin(x)^2000)
+---
+(x+1)^2	exp(sin(2*x)/2)	tan(x)+1
+(-cos(2*x)/2+1/2)/cos(x)
+error: line 3: trigreduce: the powers of sin and cos are too large
+
+=== trigexpand of tan
+disp(trigexpand(tan(x-y)), trigexpand(tan(2x)), trigexpand(tan(x+pi/4)), trigexpand(tan(x+pi/2)))
+trigexpand(tan(3x))
+---
+(tan(x)-tan(y))/(tan(x)*tan(y)+1)	2*tan(x)/(-tan(x)^2+1)	(tan(x)+1)/(-tan(x)+1)	-1/tan(x)
+(-tan(x)^3+3*tan(x))/(-3*tan(x)^2+1)
+
+=== trigreduce with tan
+disp(trigreduce((tan(x)+tan(y))/(1-tan(x)*tan(y))), trigreduce(2*tan(x)/(1-tan(x)^2)), trigreduce(trigexpand(tan(3x))))
+disp(trigreduce(sin(x)/cos(x)), trigreduce(cos(x)/sin(x)), trigreduce(tan(x)*cos(x)), trigreduce(tan(x)*sin(x)))
+disp(trigreduce(tan(x)^2), trigreduce(tan(x)^2+1), trigreduce(tan(x)/(1+tan(x)^2)))
+---
+tan(x+y)	tan(2*x)	tan(3*x)
+tan(x)	1/tan(x)	sin(x)	(-cos(2*x)/2+1/2)/cos(x)
+(-cos(2*x)+1)/(cos(2*x)+1)	2/(cos(2*x)+1)	sin(2*x)/2
 
 === real and imaginary parts
 Re(exp(2im))

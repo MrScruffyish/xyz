@@ -517,7 +517,12 @@ Expr Parser::argument()
 		}
 		return mkRange(name, v, stop, step);
 	}
-	return expr();
+	Expr e = expr();
+	if (isOp("=")) { // an equation, for solve(): x^2 = 4
+		advance();
+		return mkCall("=", {e, expr()});
+	}
+	return e;
 }
 
 Expr Parser::primary()

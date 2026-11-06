@@ -28,6 +28,22 @@ Expr mkDec(std::string text) { return make(Kind::Dec, {}, std::move(text), {}); 
 Expr mkStr(std::string text) { return make(Kind::Str, {}, std::move(text), {}); }
 Expr mkNode(Kind k, Exprs args) { return make(k, {}, {}, std::move(args)); }
 Expr mkPow(Expr b, Expr e) { return mkNode(Kind::Pow, {std::move(b), std::move(e)}); }
+Expr mkHeld(Expr shown, Expr value)
+{
+	return make(Kind::Held, {}, {}, {std::move(shown), std::move(value)});
+}
+Expr mkHeldOnly(Expr shown, std::string whyNoValue)
+{
+	return make(Kind::Held, {}, std::move(whyNoValue), {std::move(shown)});
+}
+Expr heldValue(const Expr& e)
+{
+	if (e->kind != Kind::Held)
+		return e;
+	if (e->args.size() < 2)
+		throw Error(e->name);
+	return e->args[1];
+}
 
 Expr mkCall(std::string name, Exprs args)
 {
@@ -64,6 +80,7 @@ int rank(Kind k)
 	case Kind::Arg: return 6;
 	case Kind::Dec: return 7;
 	case Kind::Str: return 8;
+	case Kind::Held: return 9;
 	}
 	return 9;
 }

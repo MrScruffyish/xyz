@@ -42,6 +42,8 @@ void checkComputable(const Expr& e)
 	if (e->kind == Kind::Str)
 		throw Error("strings can only be used as file names in save() and "
 		            "transcript()");
+	if (e->kind == Kind::Held)
+		throw Error(e->args.size() < 2 ? e->name : "a factor() result reached the simplifier");
 	if (e->kind == Kind::Call && isSymbolicFunction(e->name))
 		return; // e.g. Re(x^(1/2)): an atom
 	if (!g_safe && (e->kind == Kind::Call || e->kind == Kind::Arg))

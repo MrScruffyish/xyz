@@ -12,7 +12,7 @@ namespace xyz {
 namespace {
 BclContext g_ctx = nullptr;
 // constants compared against all the time (creating them is not free)
-BclNumber g_zero, g_one;
+BclNumber g_zero, g_one, g_longMax;
 
 struct CFree {
 	void operator()(char* p) const { std::free(p); }
@@ -33,7 +33,9 @@ BclSession::BclSession()
 	g_ctx = ctx_;
 	g_zero = bcl_bigdig2num(0);
 	g_one = bcl_bigdig2num(1);
-	if (bcl_err(g_zero) != BCL_ERROR_NONE || bcl_err(g_one) != BCL_ERROR_NONE)
+	g_longMax = bcl_bigdig2num(static_cast<BclBigDig>(LONG_MAX));
+	if (bcl_err(g_zero) != BCL_ERROR_NONE || bcl_err(g_one) != BCL_ERROR_NONE ||
+	    bcl_err(g_longMax) != BCL_ERROR_NONE)
 		throw std::runtime_error("cannot create bcl constants");
 }
 
@@ -41,6 +43,7 @@ BclSession::~BclSession()
 {
 	bcl_num_free(g_zero);
 	bcl_num_free(g_one);
+	bcl_num_free(g_longMax);
 	bcl_gc();
 	bcl_popContext();
 	bcl_ctxt_free(ctx_);
@@ -191,6 +194,10 @@ bool BigInt::toLong(long& out) const
 {
 	BclBigDig v;
 	BigInt m = abs();
+	// bcl reports an overflow with a longjmp that nothing catches here, so
+	// numbers that cannot fit are refused first
+	if (bcl_cmp(m.n_, g_longMax) > 0)
+		return false;
 	if (bcl_bigdig_keep(m.n_, &v) != BCL_ERROR_NONE)
 		return false;
 	if (v > static_cast<BclBigDig>(LONG_MAX))

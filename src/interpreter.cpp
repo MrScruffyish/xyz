@@ -4,6 +4,8 @@
 
 #include <algorithm>
 #include <fstream>
+#include <functional>
+#include <set>
 #include <new>
 #include <ostream>
 
@@ -49,6 +51,9 @@ const Builtin builtins[] = {
 	{"ln", 1, 1, -1, -1, false},
 	{"log", 1, 2, -1, -1, false},
 	{"trigexpand", 1, 1, -1, -1, false},
+	{"trigreduce", 1, 1, -1, -1, false},
+	{"factor", 1, 1, -1, -1, false},
+	{"solve", 1, 3, 1, 0, false},
 	{"disp", 1, 1000, -1, -1, true},
 	{"def", 1, 1, -1, -1, true},
 	{"unset", 1, 1000, -1, -1, true},
@@ -208,7 +213,9 @@ bool Interpreter::isLoopVar(const std::string& name) const
 	return false;
 }
 
-Expr Interpreter::resolve(const Expr& e, const Ctx& c)
+Expr Interpreter::resolve(const Expr& e, const Ctx& c) { return heldValue(resolveKeep(e, c)); }
+
+Expr Interpreter::resolveKeep(const Expr& e, const Ctx& c)
 {
 	auto hit = c.memo->find(e.get());
 	if (hit != c.memo->end())
@@ -217,6 +224,7 @@ Expr Interpreter::resolve(const Expr& e, const Ctx& c)
 	switch (e->kind) {
 	case Kind::Num:
 	case Kind::Dec:
+	case Kind::Held:
 		return e;
 	case Kind::Str:
 		throw Error("strings can only be used as file names in save() and "
@@ -348,6 +356,8 @@ Expr Interpreter::call(const Expr& e, const Ctx& c)
 		       : name == ">" ? cmp > 0 : cmp >= 0;
 		return mkInt(r);
 	}
+	if (name == "=")
+		throw Error("an equation a = b can only be used in solve()");
 	if (findBuiltin(name))
 		return callBuiltin(e, c);
 	auto it = defs_.find(name);
@@ -383,6 +393,62 @@ Expr Interpreter::callUser(const Expr& e, const Def& d, const Ctx& c)
 	return resolve(d.body, g);
 }
 
+// solve(eq[, x[, k]]): eq is a = b, x = b, or e (meaning e = 0)
+Expr Interpreter::callSolve(const Expr& e, const Ctx& c)
+{
+	const Expr& eq = e->args[0];
+	std::string x = e->args.size() >= 2 ? varName(e, 1) : "";
+	auto side = [&](const Expr& a) { return x.empty() ? resolve(a, c) : resolveFree(a, x, c); };
+	Expr f;
+	if (eq->kind == Kind::Arg) {
+		if (isRange(eq))
+			throw Error("solve: ranges (x = a to b) are only allowed in table()");
+		f = sub(side(mkSym(eq->name)), side(eq->args[0]));
+	} else if (eq->kind == Kind::Call && eq->name == "=") {
+		f = sub(side(eq->args[0]), side(eq->args[1]));
+	} else {
+		f = side(eq);
+	}
+	if (x.empty()) { // the only symbol in the equation
+		std::set<std::string> vs;
+		std::function<void(const Expr&)> walk = [&](const Expr& n) {
+			if (n->kind == Kind::Sym && !isImUnit(n) && n->name != "pi")
+				vs.insert(n->name);
+			for (const Expr& a : n->args)
+				walk(a);
+		};
+		walk(f);
+		if (vs.empty() && f->kind == Kind::Num && e->args.size() == 1)
+			return mkHeldOnly(mkDec(isZero(f) ? "every value is a solution" : "no solution"),
+			                  "solve() gives a list of solutions");
+		if (vs.size() != 1)
+			throw Error("solve: say which symbol to solve for, like solve(e, x)");
+		x = *vs.begin();
+	}
+	Solutions s = solve(f, x);
+	if (e->args.size() == 3) {
+		long k = intArg(e, 2, c, 1, 1000000);
+		if (s.all)
+			throw Error("solve: every " + x + " is a solution");
+		if (static_cast<size_t>(k) > s.roots.size())
+			throw Error("solve: there " + std::string(s.roots.size() == 1 ? "is" : "are") +
+			            " only " + std::to_string(s.roots.size()) + " solution" +
+			            (s.roots.size() == 1 ? "" : "s"));
+		return s.roots[static_cast<size_t>(k - 1)];
+	}
+	const char* why = "solve() gives a list of solutions; solve(e, x, k) gives solution number k";
+	if (s.all)
+		return mkHeldOnly(mkDec("every " + x + " is a solution"), why);
+	if (s.roots.empty() && s.unsolved.empty())
+		return mkHeldOnly(mkDec("no solution"), why);
+	Exprs shown;
+	for (const Expr& r : s.roots)
+		shown.push_back(mkArg(x, r));
+	for (const Expr& u : s.unsolved)
+		shown.push_back(mkCall("=", {u, mkInt(0)}));
+	return mkHeldOnly(mkCall("%sols", shown), why);
+}
+
 Expr Interpreter::callBuiltin(const Expr& e, const Ctx& c)
 {
 	const std::string& name = e->name;
@@ -401,7 +467,7 @@ Expr Interpreter::callBuiltin(const Expr& e, const Ctx& c)
 		if (isRange(e->args[i]))
 			throw Error(name + ": ranges (x = a to b) are only allowed in table()");
 		if (e->args[i]->kind == Kind::Arg &&
-		    !((name == "eval" || name == "subs") && i > 0))
+		    !((name == "eval" || name == "subs") && i > 0) && !(name == "solve" && i == 0))
 			throw Error(name + ": 'name=value' arguments are not allowed here");
 	}
 
@@ -444,6 +510,12 @@ Expr Interpreter::callBuiltin(const Expr& e, const Ctx& c)
 		return simpPow(resolve(e->args[0], c), mkNum(Rational(1) / Rational(2)));
 	if (name == "trigexpand")
 		return trigexpand(resolve(e->args[0], c));
+	if (name == "trigreduce")
+		return trigreduce(resolve(e->args[0], c));
+	if (name == "factor")
+		return factor(resolve(e->args[0], c));
+	if (name == "solve")
+		return callSolve(e, c);
 	if (isElementary(name) || name == "log") {
 		Exprs a;
 		for (const Expr& x : e->args)
@@ -637,13 +709,13 @@ Expr Interpreter::evaluate(const Expr& e)
 	Ctx c;
 	c.lex = lex.empty() ? nullptr : &lex;
 	c.memo = lex.empty() ? sharedMemo(nullptr, false) : &fresh;
-	return resolve(e, c);
+	return resolveKeep(e, c);
 }
 
 bool Interpreter::truth(const Expr& cond)
 {
 	shared_.clear(); // definitions may have changed since the last evaluation
-	Expr v = evaluate(cond);
+	Expr v = heldValue(evaluate(cond));
 	if (v->kind != Kind::Num)
 		throw Error("condition is not a number: " + toString(v));
 	return !v->num.isZero();
