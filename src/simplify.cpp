@@ -42,6 +42,9 @@ void checkComputable(const Expr& e)
 	if (e->kind == Kind::Str)
 		throw Error("strings can only be used as file names in save() and "
 		            "transcript()");
+	if (isList(e))
+		throw Error("lists can only be added, subtracted, multiplied, divided and "
+		            "raised to powers element by element, or used with functions");
 	if (e->kind == Kind::Held)
 		throw Error(e->args.size() < 2 ? e->name : "a factor() result reached the simplifier");
 	if (e->kind == Kind::Call && isSymbolicFunction(e->name))
@@ -178,7 +181,7 @@ Expr withCoeff(const Rational& c, const Expr& rest)
 bool isSymbolicFunction(const std::string& name)
 {
 	return name == "Re" || name == "Im" || name == "conj" || name == "abs" ||
-	       isElementary(name);
+	       name == "integrate" || isElementary(name);
 }
 
 bool complexParts(const Expr& e, Rational& re, Rational& im)
@@ -332,9 +335,11 @@ Expr sub(const Expr& a, const Expr& b) { return add(a, mul(mkInt(-1), b)); }
 
 namespace {
 
-// c*R*sin(u)^2 + c*R*cos(u)^2 -> c*R  (R: the other factors, maybe none)
+// c*R*sin(u)^2 + c*R*cos(u)^2 -> c*R  (R: the other factors, maybe none);
+// with a = cosh, b = sinh, sign = -1: c*R*cosh(u)^2 - c*R*sinh(u)^2 -> c*R
 template <class Terms>
-void sinCosSquares(Terms& terms, Rational& konst)
+void sinCosSquares(Terms& terms, Rational& konst, const char* a = "sin", const char* b = "cos",
+                   int sign = 1)
 {
 	auto squareOf = [](const Expr& f, const char* name) {
 		return f->kind == Kind::Pow && isNumber(f->args[1], 2) &&
@@ -346,12 +351,12 @@ void sinCosSquares(Terms& terms, Rational& konst)
 			const Expr rest = it->first;
 			Exprs fs = rest->kind == Kind::Mul ? rest->args : Exprs{rest};
 			for (size_t i = 0; i < fs.size(); i++) {
-				if (!squareOf(fs[i], "sin"))
+				if (!squareOf(fs[i], a))
 					continue;
 				Exprs other = fs;
-				other[i] = mkPow(mkCall("cos", fs[i]->args[0]->args), mkInt(2));
+				other[i] = mkPow(mkCall(b, fs[i]->args[0]->args), mkInt(2));
 				auto jt = terms.find(simpMul(other));
-				if (jt == terms.end() || jt->second.compare(it->second) != 0)
+				if (jt == terms.end() || jt->second.compare(it->second * Rational(sign)) != 0)
 					continue;
 				Rational c = it->second;
 				Exprs remaining = fs;
@@ -404,6 +409,7 @@ Expr simpAdd(const Exprs& in)
 			it->second = it->second + c;
 	}
 	sinCosSquares(terms, konst);
+	sinCosSquares(terms, konst, "cosh", "sinh", -1);
 	Exprs out;
 	for (auto& [rest, c] : terms) {
 		if (c.isZero()) {
@@ -609,6 +615,21 @@ Expr simpPow(const Expr& b, const Expr& e)
 			return mkPow(simpPow(b, mkNum(-e->num)), mkInt(-1));
 		if (eint && b->kind == Kind::Call && b->name == "exp") // exp(u)^k = exp(k*u)
 			return makeFunction("exp", {mul(e, b->args[0])});
+		// (a^k)^e = a^(k*e) when a >= 0 (assumed): sqrt(x^2) = x for x > 0
+		if (b->kind == Kind::Pow && b->args[1]->kind == Kind::Num && nonNegative(b->args[0]))
+			return simpPow(b->args[0], mul(b->args[1], e));
+		// abs(u)^(2k) = u^(2k) for real u
+		if (eint && b->kind == Kind::Call && b->name == "abs" && b->args.size() == 1 &&
+		    !containsSym(b->args[0], kImag) && e->num.numerator().mod(BigInt(2L)).isZero())
+			return simpPow(b->args[0], e);
+		// sqrt(s^(2k)) = abs(s)^k for a real symbol s
+		if (e->num.compare(Rational(1) / Rational(2)) == 0 && b->kind == Kind::Pow &&
+		    b->args[0]->kind == Kind::Sym && !isImUnit(b->args[0])) {
+			long k2;
+			if (isInt(b->args[1], k2) && k2 > 0 && k2 % 2 == 0)
+				return simpPow(absValue(b->args[0]), mkInt(k2 / 2));
+		}
+
 		if (eint) {
 			// (a^k)^n -> a^(k*n) only for integer k: (x^(1/2))^2 is
 			// not simplified to x (roots are decided later)
@@ -628,6 +649,17 @@ Expr simpPow(const Expr& b, const Expr& e)
 	}
 	if (b->kind == Kind::Num && b->num.isOne())
 		return mkInt(1);
+	if (isNumber(b, -1) && e->kind == Kind::Mul && e->args[0]->kind == Kind::Num &&
+	    e->args[0]->num.isInt()) { // (-1)^(c*m) with integer m: by the parity of c
+		Exprs rest(e->args.begin() + 1, e->args.end());
+		Expr m = simpMul(rest);
+		if (isIntegerValued(m)) {
+			BigInt c = e->args[0]->num.numerator().abs();
+			if (c.mod(BigInt(2L)).isZero())
+				return mkInt(1);
+			return mkPow(b, m);
+		}
+	}
 	return mkPow(b, e);
 }
 
@@ -802,6 +834,9 @@ Expr diff(const Expr& n, const std::string& x)
 			dependsOnX = dependsOnX || containsSym(a, x);
 		if (!dependsOnX)
 			return mkInt(0);
+		if (n->name == "integrate" && n->args.size() == 2 && n->args[1]->kind == Kind::Sym &&
+		    n->args[1]->name == x)
+			return n->args[0]; // d/dx of an integral in x
 		if (!isElementary(n->name))
 			throw Error("diff: cannot differentiate " + n->name + "()");
 		const Expr& u = n->args[0];

@@ -303,6 +303,38 @@ differ in *when* the values go in:
   inserting the values: `eval((x^2-1)/(x-1), x=1)` is `2`, while `subs`
   gives a division by zero.
 
+### Lists
+
+`[a, b, c]` is a list, and `l[k]` its item number `k` (from 1). Lists can
+hold anything, also lists: `[[1, 2], [3, 4]][2][1]` is `3`.
+
+```
+l = [1, 2, x]
+l[3]                    -> x
+length(l)               -> 3
+l + 1                   -> [2, 3, x+1]
+2*l, l^2, l/2           -> element by element
+l + [10, 20, 30]        -> [11, 22, x+30]
+sin([0, pi/2])          -> [0, 1]
+diff([x^2, sin(x)], x)  -> [2*x, cos(x)]
+seq(i^2, i = 1 to 5)    -> [1, 4, 9, 16, 25]
+sum(i, i = 1 to 100)    -> 5050
+sum([1, 2, 3])          -> 6
+[1, 2] == [1, 2]        -> 1
+```
+
+* `+ - * / ^` work element by element. A number or expression is used with
+  every element; two lists must have the same length.
+* Functions apply to each element: the elementary functions, `expand`,
+  `num`, `diff`, `integrate`, `factor`, `cancel`, `sqrt`, `Re`, `Im`,
+  `abs`, `deg`, `coeff`, `trigexpand`, `trigreduce`, `taylor`, `limit`.
+* `seq(e, i = a to b [step s])` makes a list, and `sum(e, i = a to b)`
+  adds the values (the range is written as in `table`). `sum(list)` adds
+  the elements.
+* `==` compares lists element by element. `<` and the like need numbers.
+* Lists can be stored and returned by functions (`f(t) = [t, t^2]`).
+  Items cannot be assigned (`l[2] = 5` is not possible).
+
 ### Simplification
 
 * **Evaluating simplifies automatically**, after values have been
@@ -324,9 +356,10 @@ differ in *when* the values go in:
   (`2x+x` → `3*x`), equal powers (`x*x` → `x^2`) and numbers times sums.
   Nothing that removes a division is done: `x/x`, `x^2/x` and `1/x-1/x`
   (shown as `0/x`) are kept.
-* **Roots of symbols are not combined for now**: powers of a symbol only
-  merge for integer exponents. `(x^(1/2))^2`, `(x^2)^(1/2)`, `x^a*x^b` and
-  `x^(1/2)*x^(1/2)` stay as they are (see "Not solved yet").
+* **Roots of symbols** are combined only where it is always true:
+  `(x^2)^(1/2)` → `abs(x)` (symbols are real), `abs(x)^2` → `x^2`.
+  `(x^(1/2))^2`, `x^a*x^b` and `x^(1/2)*x^(1/2)` stay as they are. With
+  `assume(x >= 0)` (see "Assumptions"), `(x^a)^b` → `x^(a*b)`.
 * **Roots of numbers**: square roots are taken exactly as far as square
   factors can be found: `sqrt(8)` → `2*2^(1/2)`, `sqrt(2/9)` → `2^(1/2)/3`,
   and `sqrt(-4)` → `2*im` (the principal value). Powers of positive numbers
@@ -380,7 +413,9 @@ real**.
 ### Elementary functions
 
 `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `exp`, `ln`, `log(b, x)` (and
-`log(x)` = `ln(x)`), with the constant `pi` (which cannot be assigned).
+`log(x)` = `ln(x)`), the hyperbolic functions `sinh`, `cosh`, `tanh`,
+`asinh`, `acosh`, `atanh`, with the constant `pi` (which cannot be
+assigned).
 Angles are in radians. There is no constant `e`: write `exp(1)`. They are
 kept basic: exact where a standard value is known, otherwise they stay as
 they are (`sin(1)`, `ln(x)`), and `num` gives decimals.
@@ -410,6 +445,13 @@ they are (`sin(1)`, `ln(x)`), and `num` gives decimals.
 * **Inverses:** `sin(asin(x))` → `x`, `cos(acos(x))` → `x`,
   `tan(atan(x))` → `x`. (`asin(sin(x))` is only `x` for some `x`, so it
   stays.)
+* **Hyperbolic functions:** values at 0 (`cosh(0)` → `1`), symmetries
+  (`sinh(-x)` → `-sinh(x)`, `cosh(-x)` → `cosh(x)`), inverses
+  (`sinh(asinh(x))` → `x`), `c*cosh(u)^2 - c*sinh(u)^2` → `c`,
+  derivatives and decimals. `Re`, `Im` use them for complex arguments:
+  `Re(sin(im*x))` → `0`, `Im(sin(im*x))` → `sinh(x)`.
+* **Integer multiples of pi** (with `assume(n, integer)`): `sin(n*pi)` →
+  `0`, `cos(n*pi)` → `(-1)^n`, `sin(x + 2*n*pi)` → `sin(x)`.
 * **sin² + cos²:** `c*sin(u)^2 + c*cos(u)^2` → `c` in sums, also with other
   factors: `3*sin(x)^2 + 3*cos(x)^2 + 1` → `4`. More is done only on
   request, with `trigexpand` and `trigreduce`.
@@ -434,8 +476,9 @@ they are (`sin(1)`, `ln(x)`), and `num` gives decimals.
   `trigexpand`. With `tan`, or `sin`/`cos` in a denominator, `tan` is
   written as `sin/cos`, the expression is made one fraction, numerator and
   denominator are reduced on their own, and `sin(v)/cos(v)` becomes
-  `tan(v)`. For a sum, this is also done term by term, and the shorter
-  result is kept. Powers above 1000 are refused.
+  `tan(v)`, also from the half-angle forms `sin(2v)/(1+cos(2v))` and
+  `(1-cos(2v))/sin(2v)`. For a sum, this is also done term by term, and
+  the shorter result is kept. Powers above 1000 are refused.
 
   ```
   trigreduce(2*sin(x)*cos(x))           -> sin(2*x)
@@ -445,6 +488,7 @@ they are (`sin(1)`, `ln(x)`), and `num` gives decimals.
   trigreduce(trigexpand(cos(3x)))       -> cos(3*x)
   trigreduce(2*tan(x)/(1-tan(x)^2))     -> tan(2*x)
   trigreduce(tan(x)^2+1)                -> 2/(cos(2*x)+1)
+  trigreduce(sin(x)/(1+cos(x)))         -> tan(x/2)
   ```
 
 ### Factoring
@@ -465,16 +509,21 @@ factor(x^6-1)               -> (x-1)*(x+1)*(x^2+x+1)*(x^2-x+1)
 factor((x^2-1)/(x^2+2x+1))  -> (x-1)/(x+1)
 factor(x^3+y^3)             -> (x+y)*(x^2-x*y+y^2)
 factor(sin(x)^2-1)          -> (sin(x)-1)*(sin(x)+1)
+factor(x^2+(a+b)*x+a*b)     -> (a+x)*(b+x)
+factor(x^2+2*sqrt(2)*x+2)   -> (x+2^(1/2))^2
 ```
 
 * **Numbers** are divided by the primes up to 10^5. What is left is
   tested with Miller-Rabin and split with Pollard's rho method (Brent's
-  variant). Every number below 2^63 is factored completely, and in
-  practice any number whose prime factors, except the largest, are below
-  about 10^11. Otherwise rho gives up after a fixed number of steps
-  (a few seconds) with an error. Numbers with more than 300 digits are
-  refused. Below 3.3·10^24 the primality test is exact. Above that, a
-  large factor is a probable prime (12 Miller-Rabin bases).
+  variant). Every number below 2^63 is factored completely. Numbers below
+  2^126 (38 digits) are done with 128-bit Montgomery arithmetic. There,
+  any number whose prime factors, except the largest, are below about
+  10^15 is factored in a few seconds. Larger numbers use bcl and find
+  prime factors up to about 10^10. Otherwise rho gives up after a fixed
+  number of steps (about 5 seconds) with an error. Numbers with more than
+  300 digits are refused. Below 3.3·10^24 the primality test is exact.
+  Above that, a large factor is a probable prime (12 or 16 Miller-Rabin
+  bases).
 * **Polynomials in one variable** are split into square-free parts
   (Yun's algorithm), then rational roots are found (`p/q` with `p`
   dividing the constant term and `q` the leading coefficient). The rest is
@@ -486,12 +535,19 @@ factor(sin(x)^2-1)          -> (sin(x)-1)*(sin(x)+1)
   each variable (`a*x+a*b` → `a*(b+x)`, `x^2*y-y+x^2-1` →
   `(x-1)*(x+1)*(y+1)`), then the square-free parts. Homogeneous
   polynomials in two variables are factored like polynomials in one
-  (`x^2-y^2` → `(x+y)*(x-y)`). Other factors in several variables are
-  kept as they are.
+  (`x^2-y^2` → `(x+y)*(x-y)`). Then factors that are linear in one of the
+  symbols are searched for: `d1*v + d2` with `d1` dividing the leading
+  coefficient in `v` and `d2` the constant term (both factored first),
+  which finds `x^2+(a+b)*x+a*b` → `(a+x)*(b+x)`. Other factors in several
+  variables are kept as they are.
 * Factors are written with integer coefficients and a positive leading
   coefficient. The number in front takes the rest. Calls and roots are
-  treated like variables (`sin(x)` above). Factoring over extensions is not
-  done: `x^2+2*sqrt(2)*x+2` stays, though it is `(x+sqrt(2))^2`.
+  treated like variables (`sin(x)` above).
+* **Roots in the coefficients:** a quadratic in one symbol whose
+  coefficients have roots is split when its discriminant is 0 or the
+  square of a rational number: `x^2+2*sqrt(2)*x+2` → `(x+2^(1/2))^2`,
+  `x^2-2*sqrt(2)*x+1` → `(x-2^(1/2)-1)*(x-2^(1/2)+1)`. Other factoring
+  over extensions is not done (`x^2-2` stays).
 
 ### Solving equations
 
@@ -513,6 +569,7 @@ solve(x^7-x)                -> x = -1, x = 0, x = 1, ... (and the four complex o
 solve(x^5-x-1)              -> x^5-x-1 = 0          (not solved)
 solve((x^2-1)/(x-1))        -> x = -1               (x = 1 makes the denominator 0)
 r = solve(x^3-2, x, 1)      -> r = 2^(1/3)
+s = solve(x^2-4); s[2]      -> 2           (the result computes as the list [-2, 2])
 ```
 
 * Only polynomial equations are solved (also fractions of polynomials:
@@ -532,9 +589,133 @@ r = solve(x^3-2, x, 1)      -> r = 2^(1/3)
   of degree 3 and 4 with symbols. `num()` of a solution gives decimals.
 * Factors without `x` (like `a` in `a*x+a*b`) are taken to be nonzero.
   `solve(a*x+b, x)` gives `-b/a` without asking whether `a = 0`.
-* The list itself cannot be used in calculations; use
-  `solve(eq, x, k)`. `solve(1/x)` gives `no solution`, `solve(x-x)` gives
+* The result is shown as `x = ...`, but it computes as the list of the
+  solutions: `s = solve(x^2-4)` shows `x = -2, x = 2`, and `s[1]` is `-2`,
+  `length(s)` is `2`, `s + 1` is `[-1, 3]`. When factors are left unsolved
+  there is no list; `solve(eq, x, k)` still gives solution `k`.
+  `solve(1/x)` gives `no solution` (the empty list), `solve(x-x)` gives
   `every value is a solution`.
+* With assumptions about `x` (see "Assumptions") only the solutions that
+  fit them are kept: after `assume(x > 0)`, `solve(x^2 = 4)` gives `x = 2`.
+
+**Systems of equations**: a list of equations, and a list of the symbols
+to solve for (or none, for all the symbols in the equations):
+
+```
+solve([x+y = 3, x-y = 1], [x, y])   -> x = 2, y = 1
+solve([x+y+z = 6, x-y = 0, y-z = 0]) -> x = 2, y = 2, z = 2
+solve([a*x+b*y = c, x-y = 0], [x, y]) -> x = c/(a+b), y = c/(a+b)
+solve([x+y = 1, 2x+2y = 2], [x, y]) -> x = -y+1          (y is free)
+solve([x+y = 1, x+y = 2], [x, y])   -> no solution
+solve([x*y = 1, x+y = 2])           -> x = 1, y = 1
+solve([x^2+y^2 = 25, x-y = 1])      -> x = -3, y = -4; x = 4, y = 3
+```
+
+* **Linear systems** are solved by Gaussian elimination with exact
+  coefficients (also with symbols as coefficients; dividing by them takes
+  them to be nonzero). The result computes as the list of the values, one
+  per symbol: free symbols stay as they are (`s[2]` above is `y`).
+* **Other systems** are solved by elimination. An equation that is linear
+  in one symbol is solved for it and put into the others. Otherwise one
+  with only one of the symbols is solved (as above) and each of its roots
+  is followed. Solution sets are separated by `;`. The result computes as
+  a list of lists, one per solution set. Systems where neither step is
+  possible give an error.
+
+### Calculus: integrate, taylor, limit
+
+```
+integrate(x^2*sin(x), x)        -> -x^2*cos(x)+2*x*sin(x)+2*cos(x)
+integrate(1/(x^3+1), x)         -> 3^(1/2)*atan(...)/3+ln(x+1)/3-ln(x^2-x+1)/6
+integrate(1/sqrt(1-x^2), x)     -> asin(x)
+integrate(exp(x)*sin(x), x)     -> (-cos(x)+sin(x))*exp(x)/2
+integrate(x*exp(x^2), x)        -> exp(x^2)/2
+integrate(sin(x)^2, x)          -> x/2-sin(2*x)/4
+integrate(exp(x^2), x)          -> integrate(exp(x^2), x)   (not found)
+integrate(x^2, x, 0, 1)         -> 1/3
+integrate(exp(-x), x, 0, inf)   -> 1
+integrate(ln(x), x, 0, 1)       -> -1
+taylor(sin(x), x, 7)            -> -x^7/5040+x^5/120-x^3/6+x
+taylor(ln(x), x = 1, 3)         -> (x-1)^3/3-(x-1)^2/2+x-1
+limit(sin(x)/x, x = 0)          -> 1
+limit((1+1/x)^x, x = inf)       -> exp(1)
+limit(1/x, x = 0, right)        -> inf
+limit(sqrt(x^2+x)-x, x = inf)   -> 1/2
+```
+
+* **`integrate(f, x)`** gives an antiderivative (without a constant).
+  `integrate(f, x, a, b)` gives `F(b) - F(a)`. The methods are tried in
+  turn. It is not the Risch algorithm, so some integrals that exist are
+  not found:
+  - linearity, and a table: powers, `exp`, `ln`, `sin`, `cos`, `tan`,
+    the inverse and hyperbolic functions, `abs`, `1/cos^2`, `1/sin`,
+    `tan^2`, all with linear arguments (`sin(2x+1)`);
+  - rational functions: polynomial division and partial fractions over
+    the factors found by `factor` (linear factors of any multiplicity,
+    quadratic ones with a reduction formula). Factors of degree 3 and
+    more that do not split are not integrated;
+  - `sqrt` of a quadratic and `1/sqrt` of a quadratic (`asin`, `asinh`,
+    `acosh`, `ln`);
+  - integration by parts: a polynomial times `exp`, `sin`, `cos`, `sinh`,
+    `cosh`, `c^x`, or times `ln`, `asin`, `acos`, `atan`, ...;
+    `exp(ax)*sin(bx)` and `exp(ax)*cos(bx)`;
+  - substitution: `f(u(x))*u'(x)` for the parts `u` of the integrand
+    (`x*exp(x^2)`, `ln(x)/x`, `x*sqrt(x+1)`, `1/(1+exp(x))`);
+  - products and powers of `sin` and `cos` (with `trigreduce`).
+  Logarithms are written without absolute values: `integrate(1/x, x)` is
+  `ln(x)`. What is not found stays as `integrate(f, x)`, also for parts of
+  a sum. Its derivative is `f`.
+* **Definite integrals** use limits at `inf`, `-inf`, and at bounds where
+  the antiderivative is not defined (`ln(0)` above). A divergent integral
+  gives `inf` or `-inf`. A pole between the bounds (a real root of the
+  denominator) gives an error: `integrate(1/x^2, x, -1, 1)`. Other
+  singularities between the bounds (of `tan`, `ln`, ...) are not checked.
+* **`taylor(f, x = a, n)`** is the Taylor polynomial of degree `n` at `a`
+  (`taylor(f, x, n)` at 0; `n` is 5 when left out). It is made from the
+  derivatives, so it needs `f` to be differentiable at `a`
+  (`taylor(ln(x), x = 0, 3)` gives an error).
+* **`limit(f, x = a)`**, and `limit(f, x = a, left)` or `right`. `a` may
+  be `inf` or `-inf`, and the result may be `inf` or `-inf`. Where `f` is
+  defined it is its value. Otherwise the limits of the parts are
+  combined, with L'Hôpital's rule for 0/0 and inf/inf, `0*inf` rewritten
+  as a quotient, `b^e` as `exp(e*ln(b))`, `A - B` with a square root as
+  `(A^2-B^2)/(A+B)`, and the known limits of the functions
+  (`ln(0+) = -inf`, `atan(inf) = pi/2`). At `inf`, powers and roots of
+  polynomials go by their leading terms. The sign of an infinite limit is
+  found numerically, close to the point. When the two sides differ, or no
+  rule applies, it gives an error (`limit(sin(x), x = inf)`).
+* `inf` is a constant name for these functions. It can be used in limits
+  and integral bounds, and comes out of them, but arithmetic with it is
+  not defined: `inf + 1` stays `inf+1`.
+
+### Assumptions
+
+`assume` tells what is known about a symbol. It is a statement on its
+own:
+
+```
+assume(x > 0)         also >=, <, <=, and 0 < x
+assume(n, integer)
+assumptions()         -> lists them: x > 0, n is an integer
+forget(x)             -> removes what is known about x
+```
+
+What follows from them:
+
+* `sqrt(x^2)` → `x`, `abs(x)` → `x` for `x >= 0` (and `-x` for `x <= 0`),
+  `(x^a)^b` → `x^(a*b)` for `x >= 0`.
+* `ln(a*b)` → `ln(a)+ln(b)` when every factor is known to be positive
+  (`ln(2x)` → `ln(2)+ln(x)`), and `ln(x^r)` → `r*ln(x)` for `x > 0`.
+* For integers: `sin(n*pi)` → `0`, `cos(n*pi)` → `(-1)^n`,
+  `sin(x + 2*n*pi)` → `sin(x)`, `(-1)^(2n)` → `1`.
+* `solve` keeps only the solutions that fit (real and with the right
+  sign, integer).
+
+Signs of expressions are worked out from the assumptions: sums and
+products of positive terms are positive, even powers of real values are
+`>= 0`, `exp` of a real value is positive. All symbols are real in any
+case. Assumptions are part of the session (`save` writes the `assume`
+statements); `unset` does not remove them, `forget` does.
 
 ### Comparisons and logic
 
@@ -552,6 +733,7 @@ they are equal when its numerator is `0`:
   have values. Quotients are compared wherever both sides are defined.
 * **Roots and symbolic powers** are treated like separate symbols, so
   `x^(1/2)*x^(1/2) == x` is false for now (see "Simplification").
+* **Lists** are equal when they have the same length and equal elements.
 
 `<`, `<=`, `>`, `>=` require both sides to evaluate to numbers; using
 them on free symbols is an error. Comparisons give `1` (true) or `0`
@@ -685,8 +867,19 @@ pipes straight into gnuplot, `sort` or a spreadsheet.
 | `log(b, x)`         | logarithm to base `b`; `log(x)` is `ln(x)`                  |
 | `trigexpand(e)`     | addition and multiple-angle formulas                        |
 | `trigreduce(e)`     | products and powers of sin/cos as sums of sin/cos           |
+| `sinh`, `cosh`, `tanh` | hyperbolic functions                                     |
+| `asinh`, `acosh`, `atanh` | inverse hyperbolic functions                          |
 | `factor(e)`         | primes of a number, factors of a polynomial or fraction     |
 | `solve(eq, x[, k])` | solutions of a polynomial equation (`k`: only solution `k`) |
+| `solve([eqs], [xs])` | a system of equations                                      |
+| `integrate(f, x[, a, b])` | antiderivative, or the integral from `a` to `b`       |
+| `taylor(f, x = a, n)` | Taylor polynomial of degree `n` at `a`                    |
+| `limit(f, x = a[, left\|right])` | limit, also at `inf` and `-inf`                 |
+| `length(l)`         | number of elements of a list                                |
+| `seq(e, i = a to b)` | list of the values of `e`                                  |
+| `sum(e, i = a to b)`, `sum(l)` | sum of the values, or of a list                  |
+| `assume(x > 0)`, `assume(n, integer)` | what is known about a symbol (statement only) |
+| `forget(x)`, `assumptions()` | removes / lists assumptions (statement only)       |
 | `Re(z)`, `Im(z)`    | real and imaginary part (symbols are real)                  |
 | `conj(z)`           | complex conjugate                                           |
 | `abs(z)`            | absolute value                                              |
@@ -792,20 +985,29 @@ never broken into several lines, whatever their length (bc breaks lines at
 Things that are known to be missing or only partly done:
 
 * **Factoring and solving** are kept simple. Factoring is over the
-  rationals only, and fully only in one variable. Kronecker's method gives
-  up on large polynomials, and Pollard's rho on numbers with two large
-  prime factors (see `factor`). `solve` only handles polynomial equations,
-  solves degree 5 and more only through factors, and gives the general
-  quartic as a long exact formula.
+  rationals (and the roots already in the coefficients of a quadratic),
+  and fully only in one variable. Kronecker's method gives up on large
+  polynomials, and Pollard's rho on numbers with two large prime factors
+  (see `factor`). `solve` only handles polynomial equations, solves degree
+  5 and more only through factors, gives the general quartic as a long
+  exact formula, and solves systems only by linear algebra and simple
+  elimination.
+* **Lists** cannot be changed in place (`l[2] = 5`), and there are no
+  matrices: `*` on lists is element by element.
 
-* **Domains and assumptions.** There is no way to say that `x > 0` or that
-  `x` is an integer or complex. All symbols are taken to be real, and
-  simplifications that need more (`sqrt(x^2)` → `x` for `x >= 0`,
-  `ln(x*y)` → `ln(x)+ln(y)`) are not done. An `assume(x > 0)` would help,
-  but is a large piece of work.
+* **Assumptions** are about signs and integers of single symbols only.
+  There are no intervals (`asin(sin(x))` → `x` needs `-pi/2 <= x <= pi/2`),
+  no complex symbols, and nothing like `assume(x > y)`. Signs of
+  expressions are only found for simple combinations.
+* **Calculus.** `integrate` is a set of methods, not a decision procedure
+  (`exp(x^2)` has no elementary antiderivative, but others that have one
+  may be missed). Definite integrals check only the poles of the
+  denominator between the bounds. `limit` gives up where its rules do not apply (oscillation,
+  nested limits that L'Hôpital cannot shorten). There are no series beyond
+  Taylor polynomials, and no differential equations.
 * **Roots of symbols.** `(x^(1/2))^2` is not simplified to `x`, and
   `x^a*x^b` is not combined, even though both are true for the principal
-  values. `(x^2)^(1/2)` is `abs(x)` for real `x`, which is not used yet.
+  values.
 * **Which square root?** `sqrt(-4)` gives `2*im`, the principal value
   (the root with positive real part, or positive imaginary part for
   negative numbers). This is what Mathematica, Maple, Julia, MATLAB and
@@ -821,19 +1023,16 @@ Things that are known to be missing or only partly done:
   extra symbol, so `gcd(x^2+1, x-im)` is `1`, although `x^2+1 = (x-im)(x+im)`.
 * **`==` with roots or unknown functions** can be false for equal
   expressions: `x^(1/2)*x^(1/2) == x` is false.
-* **Hyperbolic functions** (`sinh`, `cosh`, `tanh` and inverses) are not
-  there yet. Because of that, `Re(sin(im*x))` and the like stay as they
-  are (numerically `num(sin(1+im))` works).
 * **Complex arguments of `asin`, `acos`, `atan`**, and `asin(2)` (which is
   complex): no exact or decimal value yet, they stay as they are.
 * **Inverse of a function:** `asin(sin(x))` is `x` only for
-  `-pi/2 <= x <= pi/2`, so it is not simplified. That needs domains.
+  `-pi/2 <= x <= pi/2`, so it is not simplified (assumptions have no
+  intervals).
 * **Logarithm rules** `ln(a*b)` → `ln(a)+ln(b)` and `ln(x^n)` → `n*ln(x)`
-  are only true for positive values, so they are not done (needs domains).
+  are only done when the factors are assumed positive.
 * **Automatic trigonometric simplification** beyond `sin^2+cos^2 = 1` is
   not done: `trigexpand` and `trigreduce` must be asked for, and nothing
-  picks the shortest form by itself. Half-angle forms are not recognised:
-  `trigreduce(sin(2x)/(1+cos(2x)))` stays, though it is `tan(x)`.
+  picks the shortest form by itself.
 * **`num` has no proven error bounds.** The guard digits make a wrong
   last digit very unlikely, but not impossible. Numbers with more than
   100000 digits are refused.
@@ -858,7 +1057,10 @@ Things that are known to be missing or only partly done:
   ascending primes whose product is the number. `factor` of random
   products of polynomials is checked by value. `solve` is checked by
   putting every solution back into the polynomial (with `num`) and by
-  counting the solutions.
+  counting the solutions. Linear systems with a known solution are solved
+  and compared. `integrate` of random integrands is checked by
+  differentiating the result, and `taylor` by comparing with the function
+  close to the point.
   `=` and `:=` are checked against a Python model of both semantics. A
   failure prints its seed (`--seed N`) so it can be reproduced.
 
@@ -872,9 +1074,12 @@ Things that are known to be missing or only partly done:
 | `src/simplify.cpp`         | simplification, expand, diff, polynomial helpers |
 | `src/gcd.cpp`              | gcd/lcm of numbers and polynomials, cancel       |
 | `src/complex.cpp`          | Re, Im, conj, abs                                |
-| `src/elem.cpp`             | sin, cos, tan, asin, acos, atan, exp, ln, log, trigexpand, trigreduce |
+| `src/elem.cpp`             | elementary and hyperbolic functions, trigexpand, trigreduce |
 | `src/factor.cpp`           | factor(): primes, polynomial factorization       |
-| `src/solve.cpp`            | solve(): polynomial equations up to degree 4     |
+| `src/solve.cpp`            | solve(): polynomial equations, systems           |
+| `src/integrate.cpp`        | integrate()                                      |
+| `src/limit.cpp`            | limit(), taylor()                                |
+| `src/assume.cpp`           | assumptions, known signs                         |
 | `src/numeric.cpp`          | decimal values for num()                         |
 | `src/print.cpp`            | expression → text                                |
 | `src/parser.*`             | lexer and recursive-descent parser               |

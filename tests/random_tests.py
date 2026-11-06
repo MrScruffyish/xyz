@@ -13,7 +13,9 @@
   7. complex arithmetic and Re/Im/conj vs exact complex fractions
      num() vs Python's decimal module; diff vs central differences;
      trigexpand and trigreduce keep the value
-     factor: primes / same value; solve: the solutions make p zero
+     factor: primes / same value; solve: the solutions make p zero,
+     linear systems with known solutions; integrate: d/dx of the result;
+     taylor: close to the function
   8. '=' snapshots and ':=' formulas vs a Python model
 
 usage: random_tests.py [binary] [--count N] [--seed S]
@@ -779,6 +781,100 @@ def test_solve(binary, rng, count):
                 fail("solve", f"{p}, solution {k}: p(x) = {g}")
 
 
+def test_linear_systems(binary, rng, count):
+    """solve() of a random linear system with a known solution gives it."""
+    lines, want = [], []
+    for _ in range(count):
+        n = rng.randint(1, 4)
+        names = ["x", "y", "z", "w"][:n]
+        sol = [F(rng.randint(-9, 9), rng.randint(1, 4)) for _ in range(n)]
+        while True:  # a regular matrix
+            a = [[rng.randint(-5, 5) for _ in range(n)] for _ in range(n)]
+            m = [r[:] for r in a]
+            det = F(1)
+            for c in range(n):  # determinant by elimination
+                p = next((r for r in range(c, n) if m[r][c] != 0), None)
+                if p is None:
+                    det = F(0)
+                    break
+                m[c], m[p] = m[p], m[c]
+                det *= m[c][c]
+                for r in range(c + 1, n):
+                    f = F(m[r][c]) / m[c][c]
+                    m[r] = [m[r][k] - f * m[c][k] for k in range(n)]
+            if det != 0:
+                break
+        eqs = []
+        for r in a:
+            lhs = "+".join(f"({c})*{v}" for c, v in zip(r, names))
+            rhs = sum(c * s_ for c, s_ in zip(r, sol))
+            eqs.append(f"{lhs} = {rhs}")
+        lines.append(f"solve([{', '.join(eqs)}], [{', '.join(names)}])")
+        want.append(", ".join(f"{v} = {fstr(s_)}" for v, s_ in zip(names, sol)))
+    for line, w, g in zip(lines, want, xyz(binary, lines)):
+        if g != w:
+            fail("linear system", f"{line} -> {g}, expected {w}")
+
+
+def gen_integrand(rng):
+    a, b = rng.randint(1, 5), rng.randint(-5, 5)
+    n = rng.randint(0, 4)
+    lin = f"({a}*x+({b}))"
+    return rng.choice([
+        f"x^{n}", f"{lin}^{rng.randint(-4, 6)}", f"exp({lin})", f"sin({lin})",
+        f"cos({lin})", f"x^{n}*exp({lin})", f"x^{n}*sin({lin})", f"x^{n}*cos({lin})",
+        f"1/{lin}", f"1/(x^2+{a})", f"1/(x^2-{a * a})", f"x/(x^2+{a})",
+        f"1/((x+{a})*(x+({b})))", f"(x^{n}+1)/(x^2+{b * b + 1})", f"x^{n}*ln(x)",
+        f"exp({a}*x)*sin({b}*x)", f"sin(x)^{n}*cos(x)", f"sin({a}*x)*cos({b}*x)",
+        f"cos(x)^{n + 1}", f"x*exp(x^2)", f"1/sqrt({a}-x^2)", f"sqrt(x^2+{a})",
+        f"atan(x)*x^{n}", f"sinh({lin})", f"1/(x^2+{2 * a}*x+{a * a + 1})^2",
+        f"x^{n}*(x+{a})^(1/2)", f"tan({lin})",
+    ])
+
+
+def test_integrate(binary, rng, count):
+    """the derivative of integrate(f, x) is f (checked with num at a point)."""
+    lines, fs = [], []
+    for _ in range(count):
+        f = gen_integrand(rng)
+        if rng.random() < 0.4:
+            f = f"{rng.randint(1, 5)}*({f}) + {gen_integrand(rng)}"
+        fs.append(f)
+        lines.append(f"D = diff(integrate({f}, x), x) - ({f}); num(subs(D, x = 3/10), 30)")
+        lines.append(f"num(subs({f}, x = 3/10), 30)")
+    out = xyz(binary, lines)
+    for i, f in enumerate(fs):
+        g, size = out[2 * i], out[2 * i + 1]
+        try:
+            ok = abs(D(g)) <= D(10) ** -25 * max(D(1), abs(D(size)))
+        except decimal.InvalidOperation:
+            ok = False
+        if not ok:
+            fail("integrate", f"{f}: f' - integrand = {g}")
+
+
+def test_taylor(binary, rng, count):
+    """taylor(f, x = a, 5) is close to f near a: |f - T| = O(h^6)."""
+    lines, cases = [], []
+    for _ in range(count):
+        f = gen_fun(rng, rng.randint(1, 3))
+        a = f"{rng.randint(1, 9)}/{rng.randint(2, 9)}"
+        cases.append((f, a))
+        lines.append(f"T = taylor({f}, x = {a}, 5); num(subs(T - ({f}), x = {a} + 1/10^6), 60)")
+        lines.append(f"num(subs({f}, x = {a} + 1/10^6), 60)")
+    out = xyz(binary, lines)
+    for i, (f, a) in enumerate(cases):
+        g, size = out[2 * i], out[2 * i + 1]
+        if g.startswith("error") and "no Taylor series" in g:
+            continue
+        try:
+            ok = abs(D(g)) <= D(10) ** -20 * max(D(1), abs(D(size)))
+        except decimal.InvalidOperation:
+            ok = False
+        if not ok:
+            fail("taylor", f"taylor({f}, x = {a}, 5): f - T = {g}")
+
+
 # ---------------------------------------------- variables: '=' and ':='
 
 def test_links(binary, rng, count):
@@ -879,7 +975,8 @@ def main():
              test_eval, test_diff, test_division, test_gcd, test_cancel,
              test_complex, test_complex_symbols, test_num, test_diff_numeric,
              test_trigexpand, test_trigreduce, test_factor_int,
-             test_factor_poly, test_solve, test_links]
+             test_factor_poly, test_solve, test_linear_systems,
+             test_integrate, test_taylor, test_links]
     for t in tests:
         before = failures
         t(a.binary, rng, a.count)

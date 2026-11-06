@@ -10,6 +10,7 @@
 #include "expr.hpp"
 
 #include <algorithm>
+#include <map>
 
 namespace xyz {
 
@@ -188,6 +189,237 @@ Solutions solve(const Expr& e, const std::string& x)
 				s.roots.push_back(r);
 		}
 	return s;
+}
+
+LinearSolution solveLinear(const Exprs& es, const std::vector<std::string>& xs)
+{
+	size_t n = xs.size();
+	auto notLinear = [](const Expr& e) {
+		return Error("solve: only systems of linear equations can be solved, and " +
+		             toString(e) + " = 0 is not linear");
+	};
+	// rows: a[0..n-1] | b, for a . x = b
+	std::vector<Exprs> rows;
+	for (const Expr& e : es) {
+		auto [p, q] = cancelParts(e);
+		for (const std::string& x : xs)
+			if (containsSym(q, x))
+				throw notLinear(e);
+		Exprs row;
+		Expr rest = p;
+		for (const std::string& x : xs) {
+			std::map<long, Expr> cm;
+			try {
+				cm = polyCoefficients(p, x);
+			} catch (const Error&) {
+				throw notLinear(e);
+			}
+			if (!cm.empty() && cm.rbegin()->first > 1)
+				throw notLinear(e);
+			Expr a = cm.count(1) ? cm[1] : mkInt(0);
+			for (const std::string& y : xs)
+				if (containsSym(a, y))
+					throw notLinear(e);
+			row.push_back(a);
+			rest = substitute(rest, x, mkInt(0));
+		}
+		row.push_back(neg(rest));
+		rows.push_back(row);
+	}
+	// elimination to reduced row echelon form
+	std::vector<long> pivotCol;
+	size_t r = 0;
+	for (size_t col = 0; col < n && r < rows.size(); col++) {
+		size_t piv = r;
+		while (piv < rows.size() && isIdenticallyZero(rows[piv][col]))
+			piv++;
+		if (piv == rows.size())
+			continue;
+		std::swap(rows[r], rows[piv]);
+		Expr inv = simpPow(rows[r][col], mkInt(-1));
+		for (Expr& v : rows[r])
+			v = cancel(mul(v, inv));
+		for (size_t i = 0; i < rows.size(); i++) {
+			if (i == r || isIdenticallyZero(rows[i][col]))
+				continue;
+			Expr f = rows[i][col];
+			for (size_t j = 0; j <= n; j++)
+				rows[i][j] = cancel(sub(rows[i][j], mul(f, rows[r][j])));
+		}
+		pivotCol.push_back(static_cast<long>(col));
+		r++;
+	}
+	LinearSolution s;
+	for (size_t i = r; i < rows.size(); i++)
+		if (!isIdenticallyZero(rows[i][n])) {
+			s.none = true; // 0 = b with b != 0
+			return s;
+		}
+	s.free.assign(n, true);
+	s.values.resize(n);
+	for (size_t j = 0; j < n; j++)
+		s.values[j] = mkSym(xs[j]);
+	for (size_t i = 0; i < r; i++) {
+		size_t col = static_cast<size_t>(pivotCol[i]);
+		Expr v = rows[i][n];
+		for (size_t j = 0; j < n; j++)
+			if (j != col && !isIdenticallyZero(rows[i][j]))
+				v = sub(v, mul(rows[i][j], mkSym(xs[j])));
+		s.values[col] = cancel(v);
+		s.free[col] = false;
+	}
+	return s;
+}
+
+namespace {
+
+using Known = std::vector<std::pair<std::string, Expr>>;
+
+bool hasAny(const Expr& e, const std::vector<std::string>& xs)
+{
+	for (const std::string& x : xs)
+		if (containsSym(e, x))
+			return true;
+	return false;
+}
+
+// conds: expressions divided by on the way, which must not be 0
+void systemRec(Exprs fs, std::vector<std::string> xs, Known known, Exprs conds,
+               std::vector<Known>& out)
+{
+	if (out.size() > 1000)
+		throw Error("solve: more than 1000 solutions");
+	Exprs rest;
+	for (const Expr& f : fs) {
+		Expr p = cancelParts(f).first;
+		if (isIdenticallyZero(p))
+			continue;
+		if (!hasAny(p, xs))
+			return; // 0 = something nonzero: no solution on this branch
+		rest.push_back(p);
+	}
+	fs = rest;
+	if (fs.empty()) {
+		for (const std::string& x : xs)
+			known.emplace_back(x, mkSym(x)); // free
+		for (const Expr& c : conds) {
+			Expr v = c;
+			for (const auto& [name, val] : known)
+				v = substitute(v, name, val);
+			if (isIdenticallyZero(v))
+				return; // divided by 0 on the way
+		}
+		out.push_back(known);
+		return;
+	}
+	auto put = [](const Exprs& v, const std::string& x, const Expr& val) {
+		Exprs r;
+		for (const Expr& f : v)
+			r.push_back(substitute(f, x, val));
+		return r;
+	};
+	auto without = [&xs](const std::string& x) {
+		std::vector<std::string> r;
+		for (const std::string& y : xs)
+			if (y != x)
+				r.push_back(y);
+		return r;
+	};
+	auto record = [](Known k, const std::string& x, const Expr& val) {
+		for (auto& [name, v] : k)
+			v = cancel(substitute(v, x, val));
+		k.emplace_back(x, val);
+		return k;
+	};
+	auto others = [&fs](size_t i) {
+		Exprs r;
+		for (size_t j = 0; j < fs.size(); j++)
+			if (j != i)
+				r.push_back(fs[j]);
+		return r;
+	};
+	// an equation linear in some symbol: first with a coefficient without
+	// the symbols; later also with one that has them (it must not be 0)
+	auto linear = [&](bool anyCoefficient) {
+		for (size_t i = 0; i < fs.size(); i++)
+			for (const std::string& x : xs) {
+				if (!containsSym(fs[i], x))
+					continue;
+				std::map<long, Expr> cm;
+				try {
+					cm = polyCoefficients(fs[i], x);
+				} catch (const Error&) {
+					continue;
+				}
+				if (cm.rbegin()->first != 1 || isIdenticallyZero(cm[1]) ||
+				    (!anyCoefficient && hasAny(cm[1], xs)))
+					continue;
+				Expr val = cancel(dv(neg(cm.count(0) ? cm[0] : mkInt(0)), cm[1]));
+				Exprs cs = conds;
+				if (hasAny(cm[1], xs))
+					cs.push_back(cm[1]);
+				Exprs cs2;
+				for (const Expr& c : cs)
+					cs2.push_back(substitute(c, x, val));
+				systemRec(put(others(i), x, val), without(x), record(known, x, val), cs2, out);
+				return true;
+			}
+		return false;
+	};
+	if (linear(false))
+		return;
+	// an equation with only one of the symbols: each of its roots
+	for (size_t i = 0; i < fs.size(); i++) {
+		std::string only;
+		int count = 0;
+		for (const std::string& x : xs)
+			if (containsSym(fs[i], x)) {
+				only = x;
+				count++;
+			}
+		if (count != 1)
+			continue;
+		Solutions s = solve(fs[i], only);
+		if (!s.unsolved.empty())
+			throw Error("solve: cannot solve " + toString(s.unsolved[0]) + " = 0 in this system");
+		for (const Expr& r : s.roots) {
+			Exprs cs;
+			for (const Expr& c : conds)
+				cs.push_back(substitute(c, only, r));
+			systemRec(put(others(i), only, r), without(only), record(known, only, r), cs, out);
+		}
+		return;
+	}
+	if (linear(true))
+		return;
+	throw Error("solve: cannot solve this system (no equation is linear in one of the "
+	            "symbols, or has only one of them)");
+}
+
+} // namespace
+
+std::vector<Exprs> solveSystem(const Exprs& es, const std::vector<std::string>& xs)
+{
+	std::vector<Known> sets;
+	systemRec(es, xs, {}, {}, sets);
+	std::vector<Exprs> out;
+	for (const Known& k : sets) {
+		Exprs v;
+		for (const std::string& x : xs)
+			for (const auto& [name, val] : k)
+				if (name == x)
+					v.push_back(val);
+		bool seen = false;
+		for (const Exprs& o : out) {
+			bool same = true;
+			for (size_t i = 0; i < v.size(); i++)
+				same = same && equal(o[i], v[i]);
+			seen = seen || same;
+		}
+		if (!seen)
+			out.push_back(v);
+	}
+	return out;
 }
 
 } // namespace xyz

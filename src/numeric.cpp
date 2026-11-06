@@ -332,8 +332,30 @@ std::optional<Cx> approxCall(const Expr& e, const Fixed& f)
 			return c;
 		return f.cdiv(s, c);
 	}
+	if (n == "sinh" || n == "cosh" || n == "tanh") {
+		Cx ep = f.cexp(z), em = f.cexp(Cx{-z.re, -z.im});
+		Cx s{divRound(ep.re - em.re, BigInt(2L)), divRound(ep.im - em.im, BigInt(2L))};
+		Cx c{divRound(ep.re + em.re, BigInt(2L)), divRound(ep.im + em.im, BigInt(2L))};
+		if (n == "sinh")
+			return s;
+		if (n == "cosh")
+			return c;
+		return f.cdiv(s, c);
+	}
 	if (!real)
-		return std::nullopt; // complex atan, asin, acos: not done yet
+		return std::nullopt; // complex atan, asin, acos, ...: not done yet
+	if (n == "asinh") // ln(x + sqrt(x^2 + 1))
+		return creal(f.ln(z.re + f.sqrt(f.mul(z.re, z.re) + f.one)));
+	if (n == "acosh") { // ln(x + sqrt(x^2 - 1)), x >= 1
+		if (z.re.compare(f.one) < 0)
+			return std::nullopt;
+		return creal(f.ln(z.re + f.sqrt(f.mul(z.re, z.re) - f.one)));
+	}
+	if (n == "atanh") { // ln((1 + x)/(1 - x))/2, |x| < 1
+		if (z.re.abs().compare(f.one) >= 0)
+			return std::nullopt;
+		return creal(divRound(f.ln(f.div(f.one + z.re, f.one - z.re)), BigInt(2L)));
+	}
 	if (n == "atan")
 		return creal(f.atan(z.re));
 	if (n == "asin" || n == "acos") {

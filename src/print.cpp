@@ -53,6 +53,8 @@ int prec(const Expr& n)
 			return P_ARG;
 		if (n->name == "%fac")
 			return !n->args.empty() && isNumber(n->args[0], -1) ? P_NEG : P_MUL;
+		if (n->name == "%list" || n->name == "%index")
+			return P_ATOM;
 		return opPrec(n->name) >= 0 ? opPrec(n->name) : P_ATOM;
 	case Kind::Add:
 		return P_ADD;
@@ -210,12 +212,36 @@ void pr(std::string& out, const Expr& n, int minPrec)
 			pr(out, n->args[1], P_OR);
 			break;
 		}
-		if (n->name == "%sols") { // solve(): x = 1, x = 2
+		if (n->name == "%list") {
+			out += '[';
 			for (size_t i = 0; i < n->args.size(); i++) {
 				if (i)
 					out += ", ";
+				pr(out, n->args[i], P_ARG);
+			}
+			out += ']';
+			break;
+		}
+		if (n->name == "%index") {
+			pr(out, n->args[0], P_ATOM);
+			out += '[';
+			pr(out, n->args[1], P_ARG);
+			out += ']';
+			break;
+		}
+		if (n->name == "%sols") { // solve(): x = 1, x = 2
+			for (size_t i = 0; i < n->args.size(); i++) {
 				const Expr& a = n->args[i];
-				if (a->kind == Kind::Arg) {
+				if (i)
+					out += a->kind == Kind::Call && a->name == "%set" ? "; " : ", ";
+				if (a->kind == Kind::Call && a->name == "%set") { // x = 1, y = 2; ...
+					for (size_t j = 0; j < a->args.size(); j++) {
+						if (j)
+							out += ", ";
+						out += a->args[j]->name + " = ";
+						pr(out, a->args[j]->args[0], P_OR);
+					}
+				} else if (a->kind == Kind::Arg) {
 					out += a->name + " = ";
 					pr(out, a->args[0], P_OR);
 				} else {
@@ -470,12 +496,31 @@ void lx(std::string& out, const Expr& n, int minPrec)
 			lx(out, n->args[1], P_OR);
 			break;
 		}
+		if (f == "%list") {
+			out += "\\left[";
+			lxArgs(out, n->args);
+			out += "\\right]";
+			break;
+		}
+		if (f == "%index") {
+			lx(out, n->args[0], P_ATOM);
+			out += "_{";
+			lx(out, n->args[1], P_ARG);
+			out += '}';
+			break;
+		}
 		if (f == "%sols") {
 			for (size_t i = 0; i < n->args.size(); i++) {
 				if (i)
 					out += ",\\quad ";
 				lx(out, n->args[i], P_ARG);
 			}
+			break;
+		}
+		if (f == "%set") {
+			out += "\\left(";
+			lxArgs(out, n->args);
+			out += "\\right)";
 			break;
 		}
 		if (f == "%fac") {
@@ -515,6 +560,20 @@ void lx(std::string& out, const Expr& n, int minPrec)
 			lx(out, n->args[1], op == P_REL ? P_ADD : op + 1);
 			break;
 		}
+		if (f == "integrate" && (n->args.size() == 2 || n->args.size() == 4)) {
+			out += "\\int";
+			if (n->args.size() == 4) {
+				out += "_{";
+				lx(out, n->args[2], P_ARG);
+				out += "}^{";
+				lx(out, n->args[3], P_ARG);
+				out += '}';
+			}
+			out += ' ';
+			lx(out, n->args[0], P_ADD);
+			out += " \\, d" + latexName(n->args[1]->name);
+			break;
+		}
 		if (f == "abs" && n->args.size() == 1) {
 			out += "\\left|";
 			lx(out, n->args[0], P_ARG);
@@ -536,7 +595,9 @@ void lx(std::string& out, const Expr& n, int minPrec)
 		static const char* const named[][2] = {
 			{"sin", "\\sin"}, {"cos", "\\cos"}, {"tan", "\\tan"},
 			{"asin", "\\arcsin"}, {"acos", "\\arccos"}, {"atan", "\\arctan"},
-			{"ln", "\\ln"}};
+			{"ln", "\\ln"}, {"sinh", "\\sinh"}, {"cosh", "\\cosh"}, {"tanh", "\\tanh"},
+			{"asinh", "\\operatorname{arsinh}"}, {"acosh", "\\operatorname{arcosh}"},
+			{"atanh", "\\operatorname{artanh}"}};
 		const char* tex = nullptr;
 		for (const auto& m : named)
 			if (f == m[0])

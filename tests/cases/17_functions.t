@@ -171,7 +171,7 @@ sin(2)
 cos(y)*exp(x)
 1
 sin(x)
-Re(sin(im*x))
+0
 ln(2)
 Re(ln(x))
 

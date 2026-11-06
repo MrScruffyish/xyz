@@ -20,7 +20,7 @@ const char* const kKeywords[] = {"if", "else", "while", "do", "for",
 // two-character operators first
 const char* const kOps[] = {":=", "==", "!=", "<=", ">=", "&&", "||",
                             "+", "-", "*", "/", "^", "(", ")", ",", "=",
-                            "<", ">", "!", "{", "}"};
+                            "<", ">", "!", "{", "}", "[", "]"};
 
 } // namespace
 
@@ -120,9 +120,9 @@ void Parser::tokenize(const std::string& s)
 				push(T::Bad, msg, line, b);
 				continue;
 			}
-			if (op[0] == '(')
+			if (op[0] == '(' || op[0] == '[')
 				depth++;
-			else if (op[0] == ')' && depth > 0)
+			else if ((op[0] == ')' || op[0] == ']') && depth > 0)
 				depth--;
 			i += std::strlen(op);
 			push(T::Op, op, line, b);
@@ -492,6 +492,12 @@ Expr Parser::unary()
 Expr Parser::power()
 {
 	Expr b = primary();
+	while (isOp("[")) { // l[k]
+		advance();
+		Expr k = expr();
+		expectOp("]", "expected ']'");
+		b = mkCall("%index", {b, k});
+	}
 	if (isOp("^")) {
 		advance();
 		return mkPow(b, unary());
@@ -556,6 +562,20 @@ Expr Parser::primary()
 		expectOp(")", "expected ')'");
 		return e;
 	}
+	if (isOp("[")) { // a list; its items may be equations, for solve()
+		advance();
+		Exprs items;
+		if (!isOp("]")) {
+			for (;;) {
+				items.push_back(argument());
+				if (!isOp(","))
+					break;
+				advance();
+			}
+		}
+		expectOp("]", "expected ',' or ']' in a list");
+		return mkList(std::move(items));
+	}
 	if (tok().type == T::Str) {
 		Expr e = mkStr(tok().text);
 		advance();
@@ -564,7 +584,7 @@ Expr Parser::primary()
 	if (tok().type == T::Kw)
 		throw SyntaxError("'" + tok().text + "' is a reserved word and cannot be "
 		                  "used as a name", tok().line);
-	syntax("expected a number, name or '('");
+	syntax("expected a number, name, '(' or '['");
 }
 
 bool textIncomplete(const std::string& s)

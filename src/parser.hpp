@@ -25,8 +25,9 @@
 //   sum       := term { ('+'|'-') term }
 //   term      := unary { ('*'|'/') unary }
 //   unary     := ('-'|'+') unary | power
-//   power     := primary [ '^' unary ]           (right associative)
+//   power     := primary { '[' expr ']' } [ '^' unary ]   (l[k]; right assoc.)
 //   primary   := NUMBER | NAME | NAME '(' [args] ')' | '(' expr ')'
+//              | '[' [args] ']'                  (a list)
 //              | STRING                        ("file name", for save)
 //   args      := arg { ',' arg }
 //   arg       := NAME '=' expr ['to' expr ['step' expr]] | expr

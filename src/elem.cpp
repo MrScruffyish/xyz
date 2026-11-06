@@ -150,10 +150,50 @@ bool isCall(const Expr& e, const char* name) { return e->kind == Kind::Call && e
 Expr fsin(const Expr& u);
 Expr fcos(const Expr& u);
 
+// u = m*pi with m an integer by assumption (n*pi, 2*n*pi)
+bool intPiMultiple(const Expr& u, Expr& m)
+{
+	if (u->kind != Kind::Mul)
+		return false;
+	Exprs rest;
+	bool hasPi = false;
+	for (const Expr& f : u->args) {
+		if (isPi(f) && !hasPi)
+			hasPi = true;
+		else
+			rest.push_back(f);
+	}
+	if (!hasPi)
+		return false;
+	m = simpMul(rest);
+	return m->kind != Kind::Num && isIntegerValued(m);
+}
+
+// u = rest + m*pi with integer m (symbolic): finds such a term
+bool intPiShift(const Expr& u, Expr& m, Expr& rest)
+{
+	if (u->kind != Kind::Add)
+		return false;
+	for (size_t i = 0; i < u->args.size(); i++)
+		if (intPiMultiple(u->args[i], m)) {
+			Exprs others;
+			for (size_t j = 0; j < u->args.size(); j++)
+				if (j != i)
+					others.push_back(u->args[j]);
+			rest = simpAdd(others);
+			return true;
+		}
+	return false;
+}
+
 Expr fsin(const Expr& u)
 {
 	Rational k;
-	Expr rest;
+	Expr rest, m;
+	if (intPiMultiple(u, m)) // sin(n*pi) = 0
+		return mkInt(0);
+	if (intPiShift(u, m, rest)) // sin(x + n*pi) = (-1)^n sin(x)
+		return mul(simpPow(mkInt(-1), m), fsin(rest));
 	if (piMultiple(u, k)) {
 		if (auto v = sinPi(k))
 			return *v;
@@ -171,7 +211,11 @@ Expr fsin(const Expr& u)
 Expr fcos(const Expr& u)
 {
 	Rational k;
-	Expr rest;
+	Expr rest, m;
+	if (intPiMultiple(u, m)) // cos(n*pi) = (-1)^n
+		return simpPow(mkInt(-1), m);
+	if (intPiShift(u, m, rest))
+		return mul(simpPow(mkInt(-1), m), fcos(rest));
 	if (piMultiple(u, k)) {
 		if (auto v = cosPi(k))
 			return *v;
@@ -275,6 +319,21 @@ Expr fln(const Expr& v)
 	// ln(exp(x)) = x for real x (symbols are real)
 	if (isCall(v, "exp") && !containsSym(v->args[0], kImag))
 		return v->args[0];
+	// with assumptions: ln(a*b) = ln(a) + ln(b) for a, b > 0, ln(a^r) = r*ln(a)
+	if (v->kind == Kind::Mul) {
+		bool all = true;
+		for (const Expr& f : v->args)
+			all = all && positive(f);
+		if (all) {
+			Exprs t;
+			for (const Expr& f : v->args)
+				t.push_back(fln(f));
+			return simpAdd(t);
+		}
+	}
+	if (v->kind == Kind::Pow && positive(v->args[0]) && !containsSym(v->args[1], kImag) &&
+	    v->args[0]->kind != Kind::Num)
+		return mul(v->args[1], fln(v->args[0]));
 	return mkCall("ln", {v});
 }
 
@@ -302,12 +361,46 @@ Expr flog(const Expr& b, const Expr& x)
 	return mul(fln(x), simpPow(fln(b), mkInt(-1)));
 }
 
+// hyperbolic functions: values at 0, symmetries, inverses
+Expr fhyp(const std::string& name, const Expr& u)
+{
+	bool odd = name != "cosh";
+	if (isZero(u))
+		return name == "cosh" ? mkInt(1) : mkInt(0);
+	if (looksNegative(u))
+		return odd ? neg(fhyp(name, neg(u))) : fhyp(name, neg(u));
+	if (isCall(u, ("a" + name).c_str()))
+		return u->args[0]; // sinh(asinh(x)) = x
+	return mkCall(name, {u});
+}
+
+Expr fahyp(const std::string& name, const Expr& v)
+{
+	if (name == "acosh") {
+		if (isNumber(v, 1))
+			return mkInt(0);
+		return mkCall(name, {v});
+	}
+	if (isZero(v))
+		return mkInt(0);
+	if (looksNegative(v)) // asinh and atanh are odd
+		return neg(fahyp(name, neg(v)));
+	if (name == "asinh" && isCall(v, "sinh"))
+		return v->args[0];
+	if (name == "atanh" && isCall(v, "tanh"))
+		return v->args[0];
+	if (name == "atanh" && (isNumber(v, 1)))
+		throw Error("atanh(1) is undefined");
+	return mkCall(name, {v});
+}
+
 } // namespace
 
 bool isElementary(const std::string& n)
 {
 	return n == "sin" || n == "cos" || n == "tan" || n == "asin" || n == "acos" ||
-	       n == "atan" || n == "exp" || n == "ln";
+	       n == "atan" || n == "exp" || n == "ln" || n == "sinh" || n == "cosh" ||
+	       n == "tanh" || n == "asinh" || n == "acosh" || n == "atanh";
 }
 
 Expr makeFunction(const std::string& name, const Exprs& a)
@@ -320,6 +413,8 @@ Expr makeFunction(const std::string& name, const Exprs& a)
 	if (name == "atan") return fatan(a[0]);
 	if (name == "exp") return fexp(a[0]);
 	if (name == "ln") return fln(a[0]);
+	if (name == "sinh" || name == "cosh" || name == "tanh") return fhyp(name, a[0]);
+	if (name == "asinh" || name == "acosh" || name == "atanh") return fahyp(name, a[0]);
 	if (name == "log")
 		return a.size() == 1 ? fln(a[0]) : flog(a[0], a[1]);
 	throw Error("unknown function '" + name + "'");
@@ -337,6 +432,12 @@ Expr derivativeOf(const std::string& name, const Expr& u)
 	if (name == "asin") return simpPow(sub(mkInt(1), mul(u, u)), minusHalf);
 	if (name == "acos") return neg(simpPow(sub(mkInt(1), mul(u, u)), minusHalf));
 	if (name == "atan") return simpPow(add(mkInt(1), mul(u, u)), mkInt(-1));
+	if (name == "sinh") return fhyp("cosh", u);
+	if (name == "cosh") return fhyp("sinh", u);
+	if (name == "tanh") return simpPow(fhyp("cosh", u), mkInt(-2));
+	if (name == "asinh") return simpPow(add(mul(u, u), mkInt(1)), minusHalf);
+	if (name == "acosh") return simpPow(sub(mul(u, u), mkInt(1)), minusHalf);
+	if (name == "atanh") return simpPow(sub(mkInt(1), mul(u, u)), mkInt(-1));
 	throw Error("diff: cannot differentiate " + name + "()");
 }
 
@@ -754,7 +855,30 @@ bool singleTrig(const Expr& e, bool& isSin, Expr& v, Expr& coef)
 
 Expr dvNum(const Expr& e, const Expr& c) { return mul(e, simpPow(c, mkInt(-1))); }
 
-// p/q, with a*sin(v)/(b*cos(v)) written as (a/b)*tan(v)
+// e = k*(1 + s*cos(w)) with s = +-1 and k a number?
+bool onePlusCos(const Expr& e, int& s, Expr& w, Rational& k)
+{
+	if (e->kind != Kind::Add || e->args.size() != 2)
+		return false;
+	size_t ni = e->args[0]->kind == Kind::Num ? 0 : 1;
+	if (e->args[ni]->kind != Kind::Num)
+		return false;
+	k = e->args[ni]->num;
+	Expr t = e->args[1 - ni];
+	Rational c(1);
+	if (t->kind == Kind::Mul && t->args.size() == 2 && t->args[0]->kind == Kind::Num) {
+		c = t->args[0]->num;
+		t = t->args[1];
+	}
+	if (!isCall(t, "cos") || k.isZero() || c.abs().compare(k.abs()) != 0)
+		return false;
+	s = (c / k).sign();
+	w = t->args[0];
+	return true;
+}
+
+// p/q, with a*sin(v)/(b*cos(v)) written as (a/b)*tan(v), and the half-angle
+// forms sin(2v)/(1+cos(2v)) = (1-cos(2v))/sin(2v) = tan(v)
 Expr trigQuotient(const Expr& p, const Expr& q)
 {
 	bool ps, qs;
@@ -763,6 +887,17 @@ Expr trigQuotient(const Expr& p, const Expr& q)
 		Expr c = mul(pc, simpPow(qc, mkInt(-1)));
 		Expr t = ftan(pv);
 		return ps ? mul(c, t) : mul(c, simpPow(t, mkInt(-1)));
+	}
+	{
+		int s1, s2;
+		Expr w1, w2;
+		Rational k1, k2;
+		auto halfTan = [](const Expr& w) { return ftan(mul(mkNum(Rational(1) / Rational(2)), w)); };
+		bool pOne = onePlusCos(p, s1, w1, k1), qOne = onePlusCos(q, s2, w2, k2);
+		if (qOne && s2 > 0 && singleTrig(p, ps, pv, pc) && ps && equal(pv, w2))
+			return mul(mul(pc, mkNum(Rational(1) / k2)), halfTan(w2)); // sin/(1+cos)
+		if (pOne && s1 < 0 && singleTrig(q, qs, qv, qc) && qs && equal(qv, w1))
+			return mul(mul(mkNum(k1), simpPow(qc, mkInt(-1))), halfTan(w1)); // (1-cos)/sin
 	}
 	// p/q with integer coefficients in q, without a common number, and a
 	// positive constant term in q where it has one

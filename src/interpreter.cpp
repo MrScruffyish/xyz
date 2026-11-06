@@ -42,6 +42,12 @@ const Builtin builtins[] = {
 	{"abs", 1, 1, -1, -1, false},
 	{"sqrt", 1, 1, -1, -1, false},
 	{"sin", 1, 1, -1, -1, false},
+	{"sinh", 1, 1, -1, -1, false},
+	{"cosh", 1, 1, -1, -1, false},
+	{"tanh", 1, 1, -1, -1, false},
+	{"asinh", 1, 1, -1, -1, false},
+	{"acosh", 1, 1, -1, -1, false},
+	{"atanh", 1, 1, -1, -1, false},
 	{"cos", 1, 1, -1, -1, false},
 	{"tan", 1, 1, -1, -1, false},
 	{"asin", 1, 1, -1, -1, false},
@@ -53,6 +59,12 @@ const Builtin builtins[] = {
 	{"trigexpand", 1, 1, -1, -1, false},
 	{"trigreduce", 1, 1, -1, -1, false},
 	{"factor", 1, 1, -1, -1, false},
+	{"length", 1, 1, -1, -1, false},
+	{"integrate", 2, 4, 1, 0, false},
+	{"taylor", 2, 3, -1, -1, false},
+	{"limit", 2, 3, -1, -1, false},
+	{"seq", 2, 2, -1, -1, false},
+	{"sum", 1, 2, -1, -1, false},
 	{"solve", 1, 3, 1, 0, false},
 	{"disp", 1, 1000, -1, -1, true},
 	{"def", 1, 1, -1, -1, true},
@@ -61,6 +73,9 @@ const Builtin builtins[] = {
 	{"save", 1, 1, -1, -1, true},
 	{"transcript", 1, 1, -1, -1, true},
 	{"latex", 1, 1, -1, -1, true},
+	{"assume", 1, 1000, -1, -1, true},
+	{"forget", 1, 1000, -1, -1, true},
+	{"assumptions", 0, 0, -1, -1, true},
 };
 
 const Builtin* findBuiltin(const std::string& name)
@@ -76,8 +91,129 @@ void checkNotReserved(const std::string& name)
 {
 	if (name == imagName())
 		throw Error("'" + name + "' is the imaginary unit and cannot be assigned");
-	if (name == "pi")
-		throw Error("'pi' is a constant and cannot be assigned");
+	if (name == "pi" || name == "inf")
+		throw Error("'" + name + "' is a constant and cannot be assigned");
+}
+
+// f applied element by element when some arguments are lists (of the same
+// length; the other arguments are used with every element)
+Expr broadcast(const Exprs& a, const std::function<Expr(const Exprs&)>& f)
+{
+	size_t n = 0;
+	bool any = false;
+	for (const Expr& x : a)
+		if (isList(x)) {
+			if (any && x->args.size() != n)
+				throw Error("lists of different lengths (" + std::to_string(n) + " and " +
+				            std::to_string(x->args.size()) + ") cannot be combined");
+			n = x->args.size();
+			any = true;
+		}
+	if (!any) {
+		Exprs v;
+		for (const Expr& x : a)
+			v.push_back(heldValue(x));
+		return f(v);
+	}
+	Exprs out;
+	for (size_t i = 0; i < n; i++) {
+		Exprs ai;
+		for (const Expr& x : a)
+			ai.push_back(isList(x) ? x->args[i] : x);
+		out.push_back(broadcast(ai, f));
+	}
+	return mkList(out);
+}
+
+Expr mapList(const Expr& v, const std::function<Expr(const Expr&)>& f)
+{
+	return broadcast({v}, [&f](const Exprs& a) { return f(a[0]); });
+}
+
+bool listsEqual(const Expr& a, const Expr& b)
+{
+	if (isList(a) || isList(b)) {
+		if (!isList(a) || !isList(b) || a->args.size() != b->args.size())
+			return false;
+		for (size_t i = 0; i < a->args.size(); i++)
+			if (!listsEqual(a->args[i], b->args[i]))
+				return false;
+		return true;
+	}
+	return isIdenticallyZero(sub(heldValue(a), heldValue(b)));
+}
+
+// integral of f for x from a to b: F(b) - F(a) (no check for poles between)
+Expr definiteIntegral(const Expr& f, const std::string& x, const Expr& a, const Expr& b)
+{
+	// a pole of f between the bounds (a root of its denominator) makes the
+	// integral improper: F(b) - F(a) would be wrong
+	auto value = [](const Expr& v, double& d) {
+		if (v->kind == Kind::Sym && v->name == "inf") {
+			d = 1e300;
+			return true;
+		}
+		if (v->kind == Kind::Mul && v->args.size() == 2 && isNumber(v->args[0], -1) &&
+		    v->args[1]->kind == Kind::Sym && v->args[1]->name == "inf") {
+			d = -1e300;
+			return true;
+		}
+		Expr n = numeric(v, 30);
+		if (n->kind == Kind::Num) {
+			d = std::stod(toString(numeric(n, 30)));
+			return true;
+		}
+		if (n->kind != Kind::Dec || n->name.find(imagName()) != std::string::npos)
+			return false;
+		d = std::stod(n->name);
+		return true;
+	};
+	double lo, hi;
+	if (value(a, lo) && value(b, hi)) {
+		if (lo > hi)
+			std::swap(lo, hi);
+		Exprs poles;
+		try {
+			Expr q = cancelParts(f).second;
+			if (containsSym(q, x))
+				poles = solve(q, x).roots;
+		} catch (const Error&) {
+		}
+		for (const Expr& r : poles) {
+			double v;
+			if (value(r, v) && v > lo && v < hi)
+				throw Error("integrate: " + toString(f) + " has a pole at " + x + " = " +
+				            toString(r) + ", between the bounds");
+		}
+	}
+	Expr F = integrate(f, x);
+	std::function<bool(const Expr&)> open = [&](const Expr& e) {
+		if (e->kind == Kind::Call && e->name == "integrate")
+			return true;
+		for (const Expr& c : e->args)
+			if (open(c))
+				return true;
+		return false;
+	};
+	if (open(F))
+		return mkCall("integrate", {f, mkSym(x), a, b});
+	// F at a bound; a limit where F is not defined there, or at +-inf
+	auto at = [&](const Expr& v, int dir) {
+		if (!containsSym(v, "inf")) {
+			try {
+				return substitute(F, x, v);
+			} catch (const Error&) {
+			}
+		}
+		return limit(F, x, v, dir);
+	};
+	Expr fb = at(b, -1), fa = at(a, 1);
+	if (containsSym(fb, "inf") || containsSym(fa, "inf")) {
+		if (equal(fb, fa))
+			throw Error("integrate: inf - inf at the bounds");
+		return containsSym(fb, "inf") ? fb : mul(mkInt(-1), fa);
+	}
+	return sub(fb, fa);
 }
 
 bool isOperator(const std::string& n)
@@ -92,7 +228,7 @@ bool isVarPos(const Expr& c, size_t i)
 	const Builtin* b = findBuiltin(c->name);
 	if (!b)
 		return false;
-	if (c->name == "def" || c->name == "unset")
+	if (c->name == "def" || c->name == "unset" || c->name == "assume" || c->name == "forget")
 		return true;
 	return b->varArg >= 0 && static_cast<size_t>(b->varArg) == i;
 }
@@ -104,7 +240,12 @@ bool shadows(const Expr& c, size_t i, const std::string& v)
 	if (!b)
 		return false;
 	// eval, subs and table rebind their names inside the first argument
-	if (c->name == "eval" || c->name == "subs" || c->name == "table") {
+	if ((c->name == "taylor" || c->name == "limit") && i == 0 && c->args.size() > 1) {
+		const Expr& a = c->args[1];
+		return (a->kind == Kind::Arg || a->kind == Kind::Sym) && a->name == v;
+	}
+	if (c->name == "eval" || c->name == "subs" || c->name == "table" || c->name == "seq" ||
+	    c->name == "sum") {
 		if (c->args[i]->kind == Kind::Arg)
 			return false;
 		for (const Expr& a : c->args)
@@ -238,11 +379,13 @@ Expr Interpreter::resolveKeep(const Expr& e, const Ctx& c)
 		a.reserve(e->args.size());
 		for (const Expr& x : e->args)
 			a.push_back(resolve(x, c));
-		r = e->kind == Kind::Add ? simpAdd(a) : simpMul(a);
+		bool add = e->kind == Kind::Add;
+		r = broadcast(a, [add](const Exprs& v) { return add ? simpAdd(v) : simpMul(v); });
 		break;
 	}
 	case Kind::Pow:
-		r = simpPow(resolve(e->args[0], c), resolve(e->args[1], c));
+		r = broadcast({resolve(e->args[0], c), resolve(e->args[1], c)},
+		              [](const Exprs& v) { return simpPow(v[0], v[1]); });
 		break;
 	case Kind::Call:
 		r = call(e, c);
@@ -257,7 +400,7 @@ Expr Interpreter::resolveKeep(const Expr& e, const Ctx& c)
 
 Expr Interpreter::lookup(const Expr& sym, const Ctx& c)
 {
-	if (isImUnit(sym) || sym->name == "pi")
+	if (isImUnit(sym) || sym->name == "pi" || sym->name == "inf")
 		return sym; // constants never have a value
 	const std::string& name = sym->name;
 	if (c.lex) {
@@ -345,7 +488,7 @@ Expr Interpreter::call(const Expr& e, const Ctx& c)
 			return mkInt(truthValue(e->args[0], c) || truthValue(e->args[1], c));
 		Expr a = resolve(e->args[0], c), b = resolve(e->args[1], c);
 		if (name == "==" || name == "!=") {
-			bool eq = isIdenticallyZero(sub(a, b));
+			bool eq = listsEqual(a, b);
 			return mkInt(eq == (name == "=="));
 		}
 		if (a->kind != Kind::Num || b->kind != Kind::Num)
@@ -358,6 +501,21 @@ Expr Interpreter::call(const Expr& e, const Ctx& c)
 	}
 	if (name == "=")
 		throw Error("an equation a = b can only be used in solve()");
+	if (name == "%list") {
+		Exprs items;
+		for (const Expr& x : e->args)
+			items.push_back(resolve(x, c));
+		return mkList(items);
+	}
+	if (name == "%index") {
+		Expr l = resolve(e->args[0], c), k = resolve(e->args[1], c);
+		if (!isList(l))
+			throw Error("only lists can be indexed: " + toString(l) + "[...]");
+		long i;
+		if (!isInt(k, i) || i < 1 || static_cast<size_t>(i) > l->args.size())
+			throw Error("index " + toString(k) + " is not in 1.." + std::to_string(l->args.size()));
+		return l->args[static_cast<size_t>(i - 1)];
+	}
 	if (findBuiltin(name))
 		return callBuiltin(e, c);
 	auto it = defs_.find(name);
@@ -393,23 +551,56 @@ Expr Interpreter::callUser(const Expr& e, const Def& d, const Ctx& c)
 	return resolve(d.body, g);
 }
 
-// solve(eq[, x[, k]]): eq is a = b, x = b, or e (meaning e = 0)
+// solve(eq[, x[, k]]): eq is a = b, x = b, or e (meaning e = 0); or a list
+// of equations with a list of symbols, for a linear system
 Expr Interpreter::callSolve(const Expr& e, const Ctx& c)
 {
-	const Expr& eq = e->args[0];
-	std::string x = e->args.size() >= 2 ? varName(e, 1) : "";
-	auto side = [&](const Expr& a) { return x.empty() ? resolve(a, c) : resolveFree(a, x, c); };
-	Expr f;
-	if (eq->kind == Kind::Arg) {
-		if (isRange(eq))
-			throw Error("solve: ranges (x = a to b) are only allowed in table()");
-		f = sub(side(mkSym(eq->name)), side(eq->args[0]));
-	} else if (eq->kind == Kind::Call && eq->name == "=") {
-		f = sub(side(eq->args[0]), side(eq->args[1]));
-	} else {
-		f = side(eq);
+	const Expr& eqArg = e->args[0];
+	// the symbols to solve for, as written (not evaluated)
+	std::vector<std::string> xs;
+	bool xList = false;
+	if (e->args.size() >= 2) {
+		const Expr& v = e->args[1];
+		if (isList(v)) {
+			xList = true;
+			for (const Expr& a : v->args) {
+				if (a->kind != Kind::Sym || isImUnit(a) || a->name == "pi")
+					throw Error("solve: the symbols to solve for must be names, like [x, y]");
+				xs.push_back(a->name);
+			}
+		} else {
+			xs.push_back(varName(e, 1));
+		}
 	}
-	if (x.empty()) { // the only symbol in the equation
+	Dyn freeDyn{c.dyn, {}, nextDyn_++};
+	for (const std::string& x : xs)
+		freeDyn.bindings[x] = mkSym(x);
+	auto side = [&](const Expr& a) { return xs.empty() ? resolve(a, c) : resolveWith(a, freeDyn, c, c.deep); };
+	auto toF = [&](const Expr& eq) {
+		if (eq->kind == Kind::Arg) {
+			if (isRange(eq))
+				throw Error("solve: ranges (x = a to b) are only allowed in table(), seq() and sum()");
+			return sub(side(mkSym(eq->name)), side(eq->args[0]));
+		}
+		if (eq->kind == Kind::Call && eq->name == "=")
+			return sub(side(eq->args[0]), side(eq->args[1]));
+		return side(eq);
+	};
+	Exprs fs;
+	bool eqList = isList(eqArg);
+	if (eqList) {
+		for (const Expr& a : eqArg->args)
+			fs.push_back(toF(a));
+	} else {
+		Expr f = toF(eqArg);
+		if (isList(f)) { // a stored list of expressions
+			eqList = true;
+			fs = f->args;
+		} else {
+			fs.push_back(f);
+		}
+	}
+	if (xs.empty()) { // the symbols in the equations
 		std::set<std::string> vs;
 		std::function<void(const Expr&)> walk = [&](const Expr& n) {
 			if (n->kind == Kind::Sym && !isImUnit(n) && n->name != "pi")
@@ -417,15 +608,101 @@ Expr Interpreter::callSolve(const Expr& e, const Ctx& c)
 			for (const Expr& a : n->args)
 				walk(a);
 		};
-		walk(f);
-		if (vs.empty() && f->kind == Kind::Num && e->args.size() == 1)
-			return mkHeldOnly(mkDec(isZero(f) ? "every value is a solution" : "no solution"),
-			                  "solve() gives a list of solutions");
-		if (vs.size() != 1)
+		for (const Expr& f : fs)
+			walk(f);
+		bool allNumbers = true;
+		for (const Expr& f : fs)
+			allNumbers = allNumbers && f->kind == Kind::Num;
+		if (vs.empty() && allNumbers && fs.size() == 1 && e->args.size() == 1)
+			return isZero(fs[0]) ? mkHeldOnly(mkDec("every value is a solution"),
+			                                  "solve: every value is a solution; there is no list of them")
+			                     : mkHeld(mkDec("no solution"), mkList({}));
+		if (vs.size() != 1 && !eqList)
 			throw Error("solve: say which symbol to solve for, like solve(e, x)");
-		x = *vs.begin();
+		xs.assign(vs.begin(), vs.end());
 	}
+	if (eqList || xList || xs.size() > 1) {
+		if (e->args.size() == 3)
+			throw Error("solve: a system of equations has one solution; leave out k");
+		if (fs.size() == 1 && xs.size() == 1 && !eqList) {
+			// solve(e, [x]): as solve(e, x)
+		} else {
+			bool linear = true;
+			LinearSolution ls;
+			try {
+				ls = solveLinear(fs, xs);
+			} catch (const Error& err) {
+				if (std::string(err.what()).find("not linear") == std::string::npos)
+					throw;
+				linear = false;
+			}
+			if (!linear) { // shown as x = 1, y = 2; x = -1, y = -2
+				auto sets = solveSystem(fs, xs);
+				if (sets.empty())
+					return mkHeld(mkDec("no solution"), mkList({}));
+				Exprs shown, values;
+				for (const Exprs& v : sets) {
+					Exprs items;
+					for (size_t i = 0; i < xs.size(); i++)
+						if (!(v[i]->kind == Kind::Sym && v[i]->name == xs[i]))
+							items.push_back(mkArg(xs[i], v[i]));
+					shown.push_back(mkCall("%set", items));
+					values.push_back(mkList(v));
+				}
+				return mkHeld(mkCall("%sols", shown), mkList(values));
+			}
+			if (ls.none)
+				return mkHeld(mkDec("no solution"), mkList({}));
+			Exprs shown;
+			for (size_t i = 0; i < xs.size(); i++)
+				if (!ls.free[i])
+					shown.push_back(mkArg(xs[i], ls.values[i]));
+			if (shown.empty())
+				return mkHeld(mkDec("every value is a solution"), mkList(ls.values));
+			return mkHeld(mkCall("%sols", shown), mkList(ls.values));
+		}
+	}
+	Expr f = fs[0];
+	std::string x = xs[0];
 	Solutions s = solve(f, x);
+	if (hasAssumptions(x)) { // only the solutions that fit the assumptions
+		Sign want = signOf(mkSym(x));
+		bool wantInt = isIntegerValued(mkSym(x));
+		Exprs kept;
+		for (const Expr& r : s.roots) {
+			bool ok = true;
+			Sign got = signOf(r);
+			int sg = 0; // the sign of r, if known
+			bool real = true, known = true;
+			if (got == Sign::Pos || got == Sign::Neg || got == Sign::Zero) {
+				sg = got == Sign::Pos ? 1 : got == Sign::Neg ? -1 : 0;
+			} else {
+				Expr v = numeric(r, 30);
+				if (v->kind == Kind::Dec) {
+					const std::string& t = v->name;
+					real = t.find(imagName()) == std::string::npos;
+					sg = t[0] == '-' ? -1 : t.find_first_not_of("0.") == std::string::npos ? 0 : 1;
+				} else if (v->kind == Kind::Num) {
+					sg = v->num.sign();
+				} else {
+					known = false; // depends on other symbols
+				}
+			}
+			if (known) {
+				if (want != Sign::Unknown && !real)
+					ok = false;
+				if (want == Sign::Pos) ok = ok && sg > 0;
+				if (want == Sign::NonNeg) ok = ok && sg >= 0;
+				if (want == Sign::Neg) ok = ok && sg < 0;
+				if (want == Sign::NonPos) ok = ok && sg <= 0;
+				if (wantInt)
+					ok = ok && r->kind == Kind::Num && r->num.isInt();
+			}
+			if (ok)
+				kept.push_back(r);
+		}
+		s.roots = kept;
+	}
 	if (e->args.size() == 3) {
 		long k = intArg(e, 2, c, 1, 1000000);
 		if (s.all)
@@ -436,17 +713,22 @@ Expr Interpreter::callSolve(const Expr& e, const Ctx& c)
 			            (s.roots.size() == 1 ? "" : "s"));
 		return s.roots[static_cast<size_t>(k - 1)];
 	}
-	const char* why = "solve() gives a list of solutions; solve(e, x, k) gives solution number k";
+	// shown as x = 1, x = 2; computes as the list [1, 2]
 	if (s.all)
-		return mkHeldOnly(mkDec("every " + x + " is a solution"), why);
+		return mkHeldOnly(mkDec("every " + x + " is a solution"),
+		                  "solve: every " + x + " is a solution; there is no list of them");
 	if (s.roots.empty() && s.unsolved.empty())
-		return mkHeldOnly(mkDec("no solution"), why);
+		return mkHeld(mkDec("no solution"), mkList({}));
 	Exprs shown;
 	for (const Expr& r : s.roots)
 		shown.push_back(mkArg(x, r));
 	for (const Expr& u : s.unsolved)
 		shown.push_back(mkCall("=", {u, mkInt(0)}));
-	return mkHeldOnly(mkCall("%sols", shown), why);
+	if (!s.unsolved.empty())
+		return mkHeldOnly(mkCall("%sols", shown),
+		                  "solve: not all solutions were found, so there is no list of them; "
+		                  "solve(e, x, k) gives solution number k");
+	return mkHeld(mkCall("%sols", shown), mkList(s.roots));
 }
 
 Expr Interpreter::callBuiltin(const Expr& e, const Ctx& c)
@@ -464,10 +746,11 @@ Expr Interpreter::callBuiltin(const Expr& e, const Ctx& c)
 		            std::to_string(b->max) + " arguments");
 	}
 	for (size_t i = 0; i < n; i++) {
-		if (isRange(e->args[i]))
-			throw Error(name + ": ranges (x = a to b) are only allowed in table()");
+		if (isRange(e->args[i]) && !((name == "seq" || name == "sum") && i == 1))
+			throw Error(name + ": ranges (x = a to b) are only allowed in table(), seq() and sum()");
 		if (e->args[i]->kind == Kind::Arg &&
-		    !((name == "eval" || name == "subs") && i > 0) && !(name == "solve" && i == 0))
+		    !((name == "eval" || name == "subs") && i > 0) && !(name == "solve" && i == 0) &&
+		    !((name == "seq" || name == "sum" || name == "taylor" || name == "limit") && i == 1))
 			throw Error(name + ": 'name=value' arguments are not allowed here");
 	}
 
@@ -494,33 +777,97 @@ Expr Interpreter::callBuiltin(const Expr& e, const Ctx& c)
 			r = cancel(r); // (x^2-1)/(x-1) -> x+1 before x is inserted
 		return resolveWith(r, dyn, c, true);
 	}
-	if (name == "expand")
-		return expand(resolve(e->args[0], c));
-	if (name == "cancel")
-		return cancel(resolve(e->args[0], c));
-	if (name == "Re")
-		return realPart(resolve(e->args[0], c));
-	if (name == "Im")
-		return imagPart(resolve(e->args[0], c));
-	if (name == "conj")
-		return conjugate(resolve(e->args[0], c));
-	if (name == "abs")
-		return absValue(resolve(e->args[0], c));
-	if (name == "sqrt")
-		return simpPow(resolve(e->args[0], c), mkNum(Rational(1) / Rational(2)));
-	if (name == "trigexpand")
-		return trigexpand(resolve(e->args[0], c));
-	if (name == "trigreduce")
-		return trigreduce(resolve(e->args[0], c));
-	if (name == "factor")
-		return factor(resolve(e->args[0], c));
+	static const std::pair<const char*, Expr (*)(const Expr&)> unary[] = {
+		{"expand", expand}, {"cancel", cancel}, {"Re", realPart}, {"Im", imagPart},
+		{"conj", conjugate}, {"abs", absValue}, {"trigexpand", trigexpand},
+		{"trigreduce", trigreduce}, {"factor", factor},
+		{"sqrt", [](const Expr& x) { return simpPow(x, mkNum(Rational(1) / Rational(2))); }}};
+	for (const auto& [fname, f] : unary)
+		if (name == fname)
+			return mapList(resolve(e->args[0], c), f);
 	if (name == "solve")
 		return callSolve(e, c);
+	if (name == "integrate") {
+		const std::string& x = varName(e, 1);
+		if (n == 3)
+			throw Error("integrate: give both bounds, integrate(f, x, a, b)");
+		Expr f = resolveFree(e->args[0], x, c);
+		if (n == 2)
+			return mapList(f, [&x](const Expr& v) { return integrate(v, x); });
+		Expr a = resolve(e->args[2], c), b = resolve(e->args[3], c);
+		return mapList(f, [&](const Expr& v) { return definiteIntegral(v, x, a, b); });
+	}
+	if (name == "taylor" || name == "limit") {
+		// taylor(f, x = a, n), taylor(f, x, n) (at 0); limit(f, x = a[, left|right])
+		const Expr& v = e->args[1];
+		std::string x;
+		Expr a = mkInt(0);
+		if (v->kind == Kind::Arg && !isRange(v)) {
+			x = v->name;
+			checkNotReserved(x);
+			a = resolve(v->args[0], c);
+		} else if (v->kind == Kind::Sym && name == "taylor") {
+			x = varName(e, 1);
+		} else {
+			throw Error(name + ": write the point as x = a, like " + name + "(f, x = 0" +
+			            (name == "taylor" ? ", 5)" : ")"));
+		}
+		Expr f = resolveFree(e->args[0], x, c);
+		if (name == "taylor") {
+			long k = n > 2 ? intArg(e, 2, c, 0, 1000) : 5;
+			return mapList(f, [&](const Expr& g) { return taylor(g, x, a, k); });
+		}
+		int dir = 0;
+		if (n > 2) {
+			const Expr& d = e->args[2];
+			if (d->kind == Kind::Sym && (d->name == "left" || d->name == "right"))
+				dir = d->name == "right" ? 1 : -1;
+			else
+				throw Error("limit: the direction is left or right");
+		}
+		return mapList(f, [&](const Expr& g) { return limit(g, x, a, dir); });
+	}
+	if (name == "length") {
+		Expr l = resolve(e->args[0], c);
+		if (!isList(l))
+			throw Error("length: " + toString(l) + " is not a list");
+		return mkInt(static_cast<long>(l->args.size()));
+	}
+	if (name == "seq" || name == "sum") {
+		if (n == 1) { // sum(list)
+			if (name == "seq")
+				throw Error("seq: write seq(e, i = a to b)");
+			Expr l = resolve(e->args[0], c);
+			if (!isList(l))
+				throw Error("sum: " + toString(l) + " is not a list; or write sum(e, i = a to b)");
+			return broadcast(l->args, [](const Exprs& v) { return simpAdd(v); });
+		}
+		const Expr& r = e->args[1];
+		if (!isRange(r))
+			throw Error(name + ": the second argument must be a range, like i = 1 to 10");
+		checkNotReserved(r->name);
+		Rational v = numberOf(resolve(r->args[0], c), "the start of a range");
+		Rational to = numberOf(resolve(r->args[1], c), "the end of a range");
+		Rational by = numberOf(resolve(r->args[2], c), "the step of a range");
+		if (by.isZero())
+			throw Error(name + ": the step of a range cannot be 0");
+		Exprs items;
+		while (by.sign() > 0 ? v.compare(to) <= 0 : v.compare(to) >= 0) {
+			if (items.size() >= 1000000)
+				throw Error(name + ": more than 1000000 values");
+			Dyn dyn{c.dyn, {{r->name, mkNum(v)}}, nextDyn_++};
+			items.push_back(resolveWith(e->args[0], dyn, c, true));
+			v = v + by;
+		}
+		if (name == "seq")
+			return mkList(items);
+		return items.empty() ? mkInt(0) : broadcast(items, [](const Exprs& a) { return simpAdd(a); });
+	}
 	if (isElementary(name) || name == "log") {
 		Exprs a;
 		for (const Expr& x : e->args)
 			a.push_back(resolve(x, c));
-		return makeFunction(name, a);
+		return broadcast(a, [&name](const Exprs& v) { return makeFunction(name, v); });
 	}
 	if (name == "gcd" || name == "lcm") {
 		Exprs v;
@@ -544,24 +891,29 @@ Expr Interpreter::callBuiltin(const Expr& e, const Ctx& c)
 	}
 	if (name == "num") {
 		long digits = n > 1 ? intArg(e, 1, c, 0, 1000000) : 20;
-		return numeric(resolve(e->args[0], c), static_cast<size_t>(digits));
+		return mapList(resolve(e->args[0], c),
+		               [digits](const Expr& x) { return numeric(x, static_cast<size_t>(digits)); });
 	}
 	if (name == "diff") {
 		const std::string& x = varName(e, 1);
 		long k = n > 2 ? intArg(e, 2, c, 0, 100000) : 1;
-		Expr r = resolveFree(e->args[0], x, c);
-		while (k-- > 0)
-			r = diff(r, x);
-		return r;
+		return mapList(resolveFree(e->args[0], x, c), [&x, k](const Expr& v) {
+			Expr r = v;
+			for (long i = 0; i < k; i++)
+				r = diff(r, x);
+			return r;
+		});
 	}
 	if (name == "deg") {
 		const std::string& x = varName(e, 1);
-		return mkInt(polyDegree(resolveFree(e->args[0], x, c), x));
+		return mapList(resolveFree(e->args[0], x, c),
+		               [&x](const Expr& v) { return mkInt(polyDegree(v, x)); });
 	}
 	if (name == "coeff") {
 		const std::string& x = varName(e, 1);
 		long k = intArg(e, 2, c, 0, 1000000000L);
-		return polyCoeff(resolveFree(e->args[0], x, c), x, k);
+		return mapList(resolveFree(e->args[0], x, c),
+		               [&x, k](const Expr& v) { return polyCoeff(v, x, k); });
 	}
 	if (name == "quo" || name == "rem") {
 		const std::string& x = varName(e, 2);
@@ -921,6 +1273,43 @@ bool Interpreter::execStatementCall(const Stmt& s)
 			row.push_back(evaluate(e->args[i]));
 		}
 		emitRow(row);
+	} else if (e->name == "assume") {
+		// assume(x > 0, y <= 0, ...), assume(n, integer)
+		if (n == 2 && e->args[0]->kind == Kind::Sym && e->args[1]->kind == Kind::Sym &&
+		    e->args[1]->name == "integer") {
+			checkNotReserved(e->args[0]->name);
+			setAssumption(e->args[0]->name, Sign::Unknown, true);
+		} else {
+			for (const Expr& a : e->args) {
+				const char* usage = "assume: write assume(x > 0), assume(x >= 0), "
+				                    "assume(x < 0), assume(x <= 0) or assume(n, integer)";
+				if (a->kind != Kind::Call || a->args.size() != 2)
+					throw Error(usage);
+				Expr l = a->args[0], r = a->args[1];
+				std::string op = a->name;
+				if (isZero(l) && r->kind == Kind::Sym) { // 0 < x
+					std::swap(l, r);
+					op = op == "<" ? ">" : op == ">" ? "<" : op == "<=" ? ">=" : op == ">=" ? "<=" : op;
+				}
+				if (l->kind != Kind::Sym || !isZero(r) || isImUnit(l) || l->name == "pi" ||
+				    l->name == "inf")
+					throw Error(usage);
+				Sign s = op == ">" ? Sign::Pos : op == ">=" ? Sign::NonNeg : op == "<" ? Sign::Neg
+				       : op == "<=" ? Sign::NonPos : Sign::Unknown;
+				if (s == Sign::Unknown)
+					throw Error(usage);
+				setAssumption(l->name, s, false);
+			}
+		}
+	} else if (e->name == "forget") {
+		for (size_t i = 0; i < n; i++)
+			forgetAssumption(varName(e, i));
+	} else if (e->name == "assumptions") {
+		auto all = listAssumptions();
+		if (all.empty())
+			emitText("no assumptions");
+		for (const std::string& t : all)
+			emitText(t);
 	} else if (e->name == "latex") {
 		if (e->args[0]->kind == Kind::Arg)
 			throw Error("latex: 'name=value' arguments are not allowed here");

@@ -20,10 +20,10 @@ factor(2^128-1)
 
 === factor bounds
 factor(10^301)
-factor(3000000037894000009807031)
+factor(3000000000000038104000000000009789493)
 ---
 error: line 1: factor: numbers with more than 300 digits are not factored
-error: line 2: factor: cannot factor 3000000037894000009807031 within the bound: it has no prime factor below 10^5, and Pollard's rho method (good for prime factors up to about 10^11) found none
+error: line 2: factor: cannot factor 3000000000000038104000000000009789493 within the bound: it has no prime factor below 10^5, and Pollard's rho method (good for prime factors up to about 10^15) found none
 
 === a factored number computes as its value
 f = factor(120)
@@ -168,7 +168,7 @@ r = 2^(1/3)
 2
 error: line 3: solve: there are only 2 solutions
 s = x = -2, x = 2
-error: line 5: solve() gives a list of solutions; solve(e, x, k) gives solution number k
+[-1, 3]
 x = \sqrt{2},\quad x = -\sqrt{2}
 
 === solve: errors

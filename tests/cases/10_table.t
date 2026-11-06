@@ -63,4 +63,4 @@ error: line 1: table: write a range as x = start to stop
 error: line 2: the end of a range must be a number, not y
 error: line 3: table: nothing to show
 error: line 4: table() can only be used as a statement on its own
-error: line 5: eval: ranges (x = a to b) are only allowed in table()
+error: line 5: eval: ranges (x = a to b) are only allowed in table(), seq() and sum()

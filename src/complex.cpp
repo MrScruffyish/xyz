@@ -91,7 +91,8 @@ std::optional<Parts> split(const Expr& e)
 		if (e->name == "Re" || e->name == "Im" || e->name == "abs")
 			return Parts{e, mkInt(0)};
 		if (e->name == "sin" || e->name == "cos" || e->name == "tan" ||
-		    e->name == "atan" || e->name == "exp") {
+		    e->name == "atan" || e->name == "exp" || e->name == "sinh" ||
+		    e->name == "cosh" || e->name == "tanh" || e->name == "asinh") {
 			auto p = split(e->args[0]);
 			if (!p)
 				return std::nullopt;
@@ -102,7 +103,33 @@ std::optional<Parts> split(const Expr& e)
 				return Parts{mul(ea, makeFunction("cos", {p->im})),
 				             mul(ea, makeFunction("sin", {p->im}))};
 			}
-			return std::nullopt; // would need sinh and cosh
+			if (e->name == "sin" || e->name == "cos") {
+				// sin(a+bi) = sin(a)cosh(b) + i cos(a)sinh(b),
+				// cos(a+bi) = cos(a)cosh(b) - i sin(a)sinh(b)
+				Expr sa = makeFunction("sin", {p->re}), ca = makeFunction("cos", {p->re});
+				Expr chb = makeFunction("cosh", {p->im}), shb = makeFunction("sinh", {p->im});
+				if (e->name == "sin")
+					return Parts{mul(sa, chb), mul(ca, shb)};
+				return Parts{mul(ca, chb), mul(mkInt(-1), mul(sa, shb))};
+			}
+			if (e->name == "sinh" || e->name == "cosh") {
+				// sinh(a+bi) = sinh(a)cos(b) + i cosh(a)sin(b),
+				// cosh(a+bi) = cosh(a)cos(b) + i sinh(a)sin(b)
+				Expr sha = makeFunction("sinh", {p->re}), cha = makeFunction("cosh", {p->re});
+				Expr cb = makeFunction("cos", {p->im}), sb = makeFunction("sin", {p->im});
+				if (e->name == "sinh")
+					return Parts{mul(sha, cb), mul(cha, sb)};
+				return Parts{mul(cha, cb), mul(sha, sb)};
+			}
+			return std::nullopt;
+		}
+		if (e->name == "acosh" || e->name == "atanh") { // real on [1, oo) and (-1, 1)
+			const Expr& v = e->args[0];
+			if (v->kind == Kind::Num &&
+			    (e->name == "acosh" ? v->num.compare(Rational(1)) >= 0
+			                        : v->num.abs().compare(Rational(1)) < 0))
+				return Parts{e, mkInt(0)};
+			return std::nullopt;
 		}
 		if (e->name == "ln") { // real for a positive number
 			const Expr& v = e->args[0];
@@ -167,6 +194,11 @@ Expr absValue(const Expr& e)
 	if (knownZero(p->im)) {
 		if (re->kind == Kind::Num)
 			return mkNum(re->num.abs());
+		if (nonNegative(re)) // assumed: abs(x) = x for x >= 0
+			return re;
+		Sign s = signOf(re);
+		if (s == Sign::Neg || s == Sign::NonPos)
+			return mul(mkInt(-1), re);
 		// abs(-3*x) = 3*abs(x)
 		if (re->kind == Kind::Mul && re->args[0]->kind == Kind::Num) {
 			Exprs rest(re->args.begin() + 1, re->args.end());

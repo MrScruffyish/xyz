@@ -30,7 +30,8 @@ using u64 = unsigned long long;
 __extension__ typedef unsigned __int128 u128;
 
 const long kTrialLimit = 100000;
-const long kRhoSteps = 400000; // Pollard rho steps for numbers >= 2^63
+const long kRhoSteps = 400000;      // Pollard rho steps for numbers >= 2^126
+const long kRho128Steps = 60000000; // ... for 2^63 <= n < 2^126
 const size_t kMaxDigits = 300;
 
 u64 mulmod(u64 a, u64 b, u64 m) { return static_cast<u64>(static_cast<u128>(a) * b % m); }
@@ -128,6 +129,195 @@ void factor64(u64 n, std::vector<BigInt>& out)
 	u64 d = rho64(n);
 	factor64(d, out);
 	factor64(n / d, out);
+}
+
+// --------------------------------- 128-bit numbers (2^63 <= n < 2^126)
+// Montgomery multiplication modulo an odd n < 2^126, with R = 2^128
+
+struct U256 {
+	u128 hi, lo;
+};
+
+U256 mul128(u128 a, u128 b)
+{
+	u64 a0 = static_cast<u64>(a), a1 = static_cast<u64>(a >> 64);
+	u64 b0 = static_cast<u64>(b), b1 = static_cast<u64>(b >> 64);
+	u128 p00 = static_cast<u128>(a0) * b0, p01 = static_cast<u128>(a0) * b1;
+	u128 p10 = static_cast<u128>(a1) * b0, p11 = static_cast<u128>(a1) * b1;
+	u128 mid = (p00 >> 64) + static_cast<u64>(p01) + static_cast<u64>(p10);
+	return {p11 + (p01 >> 64) + (p10 >> 64) + (mid >> 64), (mid << 64) | static_cast<u64>(p00)};
+}
+
+// a*b mod n by doubling, for a, b < n < 2^126 (slow; used once per n)
+u128 mulmodSlow(u128 a, u128 b, u128 n)
+{
+	u128 r = 0;
+	for (int i = 127; i >= 0; i--) {
+		r = (r << 1) % n;
+		if ((b >> i) & 1)
+			r = (r + a) % n;
+	}
+	return r;
+}
+
+struct Mont {
+	u128 n, ninv, one, r2; // ninv = -1/n mod R, one = R mod n, r2 = R^2 mod n
+	explicit Mont(u128 m) : n(m)
+	{
+		u128 inv = n; // correct to 3 bits; Newton doubles them
+		for (int i = 0; i < 7; i++)
+			inv *= 2 - n * inv;
+		ninv = -inv;
+		one = (-n) % n;
+		r2 = mulmodSlow(one, one, n);
+	}
+	u128 redc(const U256& t) const
+	{
+		u128 m = t.lo * ninv;
+		U256 mn = mul128(m, n);
+		u128 lo = t.lo + mn.lo; // 0 mod R
+		u128 r = t.hi + mn.hi + (lo < t.lo ? 1 : 0); // < 2n
+		return r >= n ? r - n : r;
+	}
+	u128 mul(u128 a, u128 b) const { return redc(mul128(a, b)); }
+	u128 to(u128 a) const { return mul(a % n, r2); }
+	u128 add(u128 a, u128 b) const
+	{
+		u128 r = a + b;
+		return r >= n ? r - n : r;
+	}
+	u128 pow(u128 a, u128 e) const
+	{
+		u128 r = one;
+		for (; e; e >>= 1) {
+			if (e & 1)
+				r = mul(r, a);
+			a = mul(a, a);
+		}
+		return r;
+	}
+};
+
+u128 gcd128(u128 a, u128 b)
+{
+	while (b) {
+		u128 t = a % b;
+		a = b;
+		b = t;
+	}
+	return a;
+}
+
+// Miller-Rabin: exact below 3.3*10^24, a probable prime above
+bool isPrime128(u128 n)
+{
+	for (u64 p : kBases)
+		if (n % p == 0)
+			return n == p;
+	Mont M(n);
+	u128 d = n - 1;
+	int s = 0;
+	for (; !(d & 1); d >>= 1)
+		s++;
+	u128 minusOne = n - M.one; // -1 in Montgomery form
+	for (u64 a : {2ULL, 3ULL, 5ULL, 7ULL, 11ULL, 13ULL, 17ULL, 19ULL, 23ULL, 29ULL, 31ULL,
+	              37ULL, 41ULL, 43ULL, 47ULL, 53ULL}) {
+		u128 x = M.pow(M.to(a), d);
+		if (x == M.one || x == minusOne)
+			continue;
+		bool composite = true;
+		for (int r = 1; r < s && composite; r++) {
+			x = M.mul(x, x);
+			composite = x != minusOne;
+		}
+		if (composite)
+			return false;
+	}
+	return true;
+}
+
+// a proper factor of the odd composite n (Brent), or 0 when the steps run out
+u128 rho128(u128 n, long& steps)
+{
+	Mont M(n);
+	for (u64 c0 = 1; steps > 0; c0++) {
+		u128 c = M.to(c0);
+		auto f = [&](u128 v) { return M.add(M.mul(v, v), c); };
+		u128 y = M.to(2), x = y, ys = y, q = M.one, g = 1;
+		for (long r = 1; g == 1 && steps > 0; r *= 2) {
+			x = y;
+			for (long i = 0; i < r; i++)
+				y = f(y);
+			steps -= r;
+			for (long k = 0; k < r && g == 1; k += 128) {
+				ys = y;
+				long m = std::min(128L, r - k);
+				for (long i = 0; i < m; i++) {
+					y = f(y);
+					q = M.mul(q, x > y ? x - y : y - x);
+				}
+				steps -= m;
+				g = gcd128(q, n);
+			}
+		}
+		if (g == n)
+			do {
+				ys = f(ys);
+				g = gcd128(x > ys ? x - ys : ys - x, n);
+			} while (g == 1);
+		if (g != 1 && g != n)
+			return g;
+	}
+	return 0;
+}
+
+std::string u128String(u128 v)
+{
+	if (v == 0)
+		return "0";
+	std::string s;
+	for (; v; v /= 10)
+		s.insert(s.begin(), static_cast<char>('0' + static_cast<int>(v % 10)));
+	return s;
+}
+
+bool toU128(const BigInt& n, u128& v)
+{
+	std::string s = n.toString();
+	if (n.sign() < 0 || s.size() > 38)
+		return false;
+	v = 0;
+	for (char ch : s)
+		v = v * 10 + static_cast<u128>(ch - '0');
+	return (v >> 126) == 0;
+}
+
+void factor64(u64 n, std::vector<BigInt>& out);
+
+void factor128(u128 n, std::vector<BigInt>& out, long& steps)
+{
+	if (n == 1)
+		return;
+	if ((n >> 63) == 0) {
+		factor64(static_cast<u64>(n), out);
+		return;
+	}
+	if (n % 2 == 0) {
+		out.push_back(BigInt(2L));
+		factor128(n / 2, out, steps);
+		return;
+	}
+	if (isPrime128(n)) {
+		out.push_back(BigInt::fromDigits(u128String(n)));
+		return;
+	}
+	u128 d = rho128(n, steps);
+	if (d == 0)
+		throw Error("factor: cannot factor " + u128String(n) +
+		            " within the bound: it has no prime factor below 10^5, and Pollard's "
+		            "rho method (good for prime factors up to about 10^15) found none");
+	factor128(d, out, steps);
+	factor128(n / d, out, steps);
 }
 
 bool fitsLong(const BigInt& n, u64& v)
@@ -234,6 +424,12 @@ void factorBig(const BigInt& n, std::vector<BigInt>& out, long& steps)
 		return;
 	if (fitsLong(n, v)) {
 		factor64(v, out);
+		return;
+	}
+	u128 w;
+	if (toU128(n, w)) {
+		long s128 = kRho128Steps;
+		factor128(w, out, s128);
 		return;
 	}
 	if (isPrimeBig(n)) {
@@ -705,6 +901,61 @@ bool isHomogeneous(const Expr& p, long& total)
 
 using Parts = std::vector<std::pair<Expr, long>>;
 
+// the divisors of a factored polynomial (products of its factors, with the
+// divisors of its number in front), at most limit of them
+bool polyDivisors(const Factored& f, Exprs& out, size_t limit)
+{
+	std::vector<BigInt> nums;
+	try {
+		if (!f.content.isInt() || !divisors(f.content.numerator().abs(), nums, 64))
+			return false;
+	} catch (const Error&) {
+		return false;
+	}
+	out.clear();
+	for (const BigInt& d : nums)
+		out.push_back(mkNum(Rational(d, BigInt(1L))));
+	for (const auto& [g, k] : f.parts) {
+		size_t n = out.size();
+		Expr gk = mkInt(1);
+		for (long i = 1; i <= k; i++) {
+			gk = mul(gk, g);
+			for (size_t j = 0; j < n; j++)
+				out.push_back(expand(mul(out[j], gk)));
+			if (out.size() > limit)
+				return false;
+		}
+	}
+	return true;
+}
+
+// a factor d1*v + d2 of p, linear in one of its symbols v (d1 divides the
+// leading coefficient and d2 the constant term), or null
+Expr linearFactor(const Expr& p, const std::set<std::string>& vs)
+{
+	for (const std::string& v : vs) {
+		auto cm = polyCoefficients(p, v);
+		if (cm.rbegin()->first < 2 || !cm.count(0))
+			continue;
+		Exprs ds1, ds2;
+		if (!polyDivisors(factorPolynomial(cm.rbegin()->second), ds1, 200) ||
+		    !polyDivisors(factorPolynomial(cm[0]), ds2, 200))
+			continue;
+		size_t tried = 0;
+		for (const Expr& d1 : ds1)
+			for (const Expr& d2 : ds2)
+				for (int s : {1, -1}) {
+					if (++tried > 5000)
+						return nullptr;
+					Expr cand = add(mul(d1, mkSym(v)), mul(mkInt(s), d2));
+					auto [n, d] = cancelParts(mul(p, simpPow(cand, mkInt(-1))));
+					if (d->kind == Kind::Num && containsSym(cand, v))
+						return expand(cand);
+				}
+	}
+	return nullptr;
+}
+
 // the square-free, primitive p (no common factors): split it further
 void splitSquareFree(const Expr& p, long m, Parts& out)
 {
@@ -732,6 +983,14 @@ void splitSquareFree(const Expr& p, long m, Parts& out)
 					                                  simpPow(y, mkInt(degree(f) - static_cast<long>(i))))));
 				out.emplace_back(simpAdd(t), m * k);
 			}
+			return;
+		}
+	}
+	if (vs.size() >= 2) {
+		Expr f = linearFactor(p, vs);
+		if (f) {
+			splitSquareFree(f, m, out);
+			splitSquareFree(exactQuo(p, f), m, out);
 			return;
 		}
 	}
@@ -848,12 +1107,59 @@ Expr factor(const Expr& e)
 		return factorNumber(e->num);
 	auto [p, q] = cancelParts(e);
 	Factored fp = factorPolynomial(p), fq = factorPolynomial(q);
-	Rational content = fp.content / fq.content;
-	if (fq.parts.empty() && fp.parts.size() == 1 && fp.parts[0].second == 1 && content.isOne())
+	Expr content = mkNum(fp.content / fq.content);
+	// quadratics in one symbol with roots in their coefficients:
+	// x^2 + 2*sqrt(2)*x + 2 = (x + sqrt(2))^2
+	for (Factored* F : {&fp, &fq}) {
+		std::vector<std::pair<Expr, long>> parts;
+		for (const auto& [f, m] : F->parts) {
+			std::set<std::string> vs;
+			symbols(f, vs);
+			std::map<long, Expr> cm;
+			bool numeric = vs.size() == 1;
+			if (numeric) {
+				try {
+					cm = polyCoefficients(f, *vs.begin());
+				} catch (const Error&) { // sin(x) - 1
+					numeric = false;
+				}
+				for (const auto& [k, c] : cm)
+					numeric = numeric && !containsSym(c, kImag) && c->kind != Kind::Sym;
+			}
+			bool radical = false;
+			for (const auto& [k, c] : cm)
+				radical = radical || c->kind != Kind::Num;
+			if (!numeric || !radical || cm.rbegin()->first != 2) {
+				parts.emplace_back(f, m);
+				continue;
+			}
+			Expr x = mkSym(*vs.begin());
+			Expr a = cm[2], b = cm.count(1) ? cm[1] : mkInt(0), c = cm.count(0) ? cm[0] : mkInt(0);
+			Expr d = expand(sub(mul(b, b), mul(mkInt(4), mul(a, c))));
+			Expr a2 = mul(mkInt(2), a);
+			Expr w = m == 1 ? a : simpPow(a, mkInt(m));
+			Expr toContent = F == &fp ? w : simpPow(w, mkInt(-1));
+			if (isZero(d)) {
+				parts.emplace_back(expand(add(x, mul(b, simpPow(a2, mkInt(-1))))), 2 * m);
+				content = mul(content, toContent);
+			} else if (d->kind == Kind::Num && d->num.sign() > 0 &&
+			           simpPow(d, mkNum(Rational(1) / Rational(2)))->kind == Kind::Num) {
+				Expr s = simpPow(d, mkNum(Rational(1) / Rational(2)));
+				for (int sg : {1, -1}) // x - (-b +- s)/(2a)
+					parts.emplace_back(expand(sub(x, mul(add(mul(mkInt(-1), b), mul(mkInt(sg), s)),
+					                                     simpPow(a2, mkInt(-1))))), m);
+				content = mul(content, toContent);
+			} else {
+				parts.emplace_back(f, m);
+			}
+		}
+		F->parts = parts;
+	}
+	if (fq.parts.empty() && fp.parts.size() == 1 && fp.parts[0].second == 1 && isNumber(content, 1))
 		return e; // nothing to factor
 	Exprs shown;
-	if (!content.isOne())
-		shown.push_back(mkNum(content));
+	if (!isNumber(content, 1))
+		shown.push_back(content);
 	for (const auto& [f, m] : fp.parts)
 		shown.push_back(m == 1 ? f : mkPow(f, mkInt(m)));
 	for (const auto& [f, m] : fq.parts)

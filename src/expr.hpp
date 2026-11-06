@@ -53,6 +53,9 @@ Expr mkCall(std::string name, Exprs args);
 Expr mkArg(std::string name, Expr value);
 Expr mkRange(std::string name, Expr start, Expr stop, Expr step);
 inline bool isRange(const Expr& e) { return e->kind == Kind::Arg && e->args.size() == 3; }
+// Lists [a, b, c] are calls of "%list"; l[k] is a call of "%index"
+inline bool isList(const Expr& e) { return e->kind == Kind::Call && e->name == "%list"; }
+inline Expr mkList(Exprs items) { return mkCall("%list", std::move(items)); }
 Expr mkHeld(Expr shown, Expr value);                  // shown as 'shown', computes as 'value'
 Expr mkHeldOnly(Expr shown, std::string whyNoValue); // shown only
 // the value of a Held node (an Error if it has none); other nodes as they are
@@ -119,6 +122,18 @@ Expr imagPart(const Expr& e);
 Expr conjugate(const Expr& e);
 Expr absValue(const Expr& e);
 
+// --- assumptions (assume.cpp) ------------------------------------------
+// assume(x > 0), assume(n, integer): what is known about symbols
+enum class Sign { Unknown, Pos, NonNeg, Neg, NonPos, Zero };
+void setAssumption(const std::string& x, Sign s, bool integer);
+void forgetAssumption(const std::string& x);
+bool hasAssumptions(const std::string& x);
+std::vector<std::string> listAssumptions(); // "x > 0", "n is an integer"
+Sign signOf(const Expr& e);                 // the known sign of e
+bool nonNegative(const Expr& e);            // known to be >= 0
+bool positive(const Expr& e);               // known to be > 0
+bool isIntegerValued(const Expr& e);        // known to be an integer
+
 // --- elementary functions (elem.cpp) -----------------------------------
 // sin cos tan asin acos atan exp ln
 bool isElementary(const std::string& name);
@@ -143,6 +158,19 @@ Factored factorPolynomial(const Expr& p);
 // the rational roots of c[0] + c[1]*x + ... + c[n]*x^n, each once, ascending
 std::vector<Rational> rationalRoots(const std::vector<Rational>& c);
 
+// --- integration (integrate.cpp) ----------------------------------------
+// An antiderivative of f in x; integrate(f, x) unevaluated (for the parts
+// of a sum) when none is found.
+Expr integrate(const Expr& f, const std::string& x);
+
+// --- limits and series (limit.cpp) -------------------------------------
+// The limit of f for x -> a (a may be inf or -inf, the symbol "inf"); dir:
+// +1 from the right, -1 from the left, 0 from both sides. Results may be
+// inf or -inf. Errors when it does not exist or cannot be found.
+Expr limit(const Expr& f, const std::string& x, const Expr& a, int dir);
+// The Taylor polynomial of f in x at a, up to (x-a)^n.
+Expr taylor(const Expr& f, const std::string& x, const Expr& a, long n);
+
 // --- equations (solve.cpp) ---------------------------------------------
 // The solutions of e = 0 for x. Factors of degree 5 and more (and
 // non-numeric ones of degree 3 and 4) that cannot be solved are returned
@@ -153,6 +181,21 @@ struct Solutions {
 	bool all = false;
 };
 Solutions solve(const Expr& e, const std::string& x);
+// A system of linear equations e_i = 0 in the symbols xs (Gaussian
+// elimination). 'values' has one entry per symbol: free symbols stay as
+// they are. 'none' is set when there is no solution; 'free' marks the
+// symbols that can be chosen freely.
+struct LinearSolution {
+	bool none = false;
+	Exprs values;
+	std::vector<bool> free;
+};
+LinearSolution solveLinear(const Exprs& es, const std::vector<std::string>& xs);
+// A polynomial system e_i = 0 in xs, by elimination: an equation linear in
+// one symbol is solved for it and substituted; else one with only one of
+// the symbols is solved, for each of its roots. Each solution has one
+// value per symbol (free symbols stay as they are).
+std::vector<Exprs> solveSystem(const Exprs& es, const std::vector<std::string>& xs);
 
 // --- decimals (numeric.cpp) ------------------------------------------
 // num(): numbers (also sqrt(2), pi, sin(1), ...) as decimals with the given

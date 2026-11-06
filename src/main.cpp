@@ -63,9 +63,14 @@ void usage(std::ostream& out)
 	       "  diff(e, x[, n]), deg(e, x), coeff(e, x, n), quo(p, q, x), rem(p, q, x),\n"
 	       "  gcd(a, b, ...), lcm(a, b, ...), cancel(e), sqrt(e), Re(z), Im(z),\n"
 	       "  conj(z), abs(z) (im is the imaginary unit), sin, cos, tan, asin, acos,\n"
-	       "  atan, exp, ln, log(b, x), trigexpand(e), trigreduce(e), pi,\n"
-	       "  factor(e), solve(eq[, x[, k]]) (eq: a = b, or e meaning e = 0)\n"
-	       "Statements: disp(e, ...), def(a), unset(a, ...),\n"
+	       "  atan, sinh, cosh, tanh, asinh, acosh, atanh, exp, ln, log(b, x), pi,\n"
+	       "  trigexpand(e), trigreduce(e), factor(e),\n"
+	       "  solve(eq[, x[, k]]) (eq: a = b, or e meaning e = 0), solve([eqs], [xs]),\n"
+	       "  integrate(f, x[, a, b]), taylor(f, x = a, n), limit(f, x = a[, left|right])\n"
+	       "  (inf for infinity), lists [a, b] and l[k], length(l), seq(e, i = a to b),\n"
+	       "  sum(e, i = a to b), sum(l)\n"
+	       "Statements: disp(e, ...), def(a), unset(a, ...), assume(x > 0),\n"
+	       "  assume(n, integer), forget(x), assumptions(),\n"
 	       "  table(e, ..., x = 1 to 10 [step s], ...), latex(e), save(\"file\"),\n"
 	       "  transcript(\"file\") (LaTeX if the name ends in .tex), quit\n";
 }

@@ -198,7 +198,7 @@ error: line 2: 'step' is a reserved word and cannot be used as a name
 a = 1; b = 2;
 c = a+
 ---
-error: line 2: syntax error: expected a number, name or '(', found end of statement
+error: line 2: syntax error: expected a number, name, '(' or '[', found end of statement
 
 === newlines inside parentheses continue the statement
 a = (1+

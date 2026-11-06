@@ -6,7 +6,7 @@
 4)
 5
 ---
-error: line 1: syntax error: expected a number, name or '(', found end of statement
+error: line 1: syntax error: expected a number, name, '(' or '[', found end of statement
 2
 3
 error: line 5: syntax error: expected end of statement, found ')'
